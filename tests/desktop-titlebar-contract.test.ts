@@ -48,6 +48,57 @@ describe("integrated titlebar", () => {
     assert.equal(Number(inset[1]), 80, "macOS strip inset must cover the traffic-light cluster");
   });
 
+  it("shares the same 40px row with overlay caption buttons on Windows", () => {
+    const windows = src("desktop/lib/windows.mjs");
+    // Only Windows hides the native caption and overlays min/max/close into the
+    // web strip; Linux keeps the native default frame (overlay unverified there).
+    assert.ok(/titleBarStyle: process\.platform === "darwin" \? "hiddenInset" : process\.platform === "win32" \? "hidden" : "default"/.test(windows),
+      "only win32 may drop the native caption; other non-mac stays on the default frame");
+    assert.ok(windows.includes('process.platform === "win32" ? { titleBarOverlay: TITLE_BAR_OVERLAY, autoHideMenuBar: true } : {}'),
+      "titleBarOverlay and the auto-hidden menu bar must be win32-only");
+    const overlay = windows.match(/TITLE_BAR_OVERLAY = \{ height: (\d+), color: "(#[0-9a-fA-F]+)", symbolColor: "(#[0-9a-fA-F]+)" \}/);
+    assert.ok(overlay, "Windows main window needs a pinned titleBarOverlay literal");
+    assert.ok(windows.includes("autoHideMenuBar: true"),
+      "the native menu bar must not render a second row (Alt still reveals it)");
+
+    const loading = src("desktop/pages/loading.css");
+    assert.ok(!loading.includes('data-platform="linux"'),
+      "loading page keeps its native frame on Linux — no drag strip there");
+
+    const css = src("ui/src/styles/top-strip.css");
+    const row = css.match(/--chrome-top-h:\s*calc\((\d+)px \/ var\(--chrome-zoom, 1\)\)/);
+    const inset = css.match(/\.app--windows \{ --wc-inset: calc\((\d+)px \/ var\(--chrome-zoom, 1\)\); \}/);
+    assert.ok(row && inset, "top-strip.css must pin --chrome-top-h and the Windows --wc-inset");
+    assert.equal(Number(overlay[1]), Number(row[1]),
+      "overlay height must equal the web strip's row height");
+    assert.ok(Number(inset[1]) >= 46 * 3,
+      `--wc-inset=${inset[1]} must clear the 3 caption buttons (~46px each)`);
+    assert.ok(/\.app--windows \.panel-top \{[^}]*var\(--wc-inset\)/s.test(css),
+      "the right-strip toggle must sit clear of the overlay buttons");
+    assert.ok(css.includes("app--settings-open:not(.app--windows) .panel-top"),
+      "on Windows .panel-top must stay mounted as the drag surface under the overlay");
+
+    assert.ok(src("ui/src/App.tsx").includes('" app--windows"'),
+      "App must tag the windows desktop shell like app--macos");
+    const shell = src("ui/src/lib/desktopShell.ts");
+    assert.ok(shell.includes('platform === "win32"'),
+      "desktopShell must expose a Windows check off the bridge platform");
+  });
+
+  it("keeps sidebar-less workspaces and the node toolbar clear of the strip", () => {
+    const css = src("ui/src/styles/top-strip.css");
+    // Collapsed nav drops the grid to one column — the sidebar-less workspaces
+    // pin column 2 for the rail, so without the override they leave a dead band.
+    assert.ok(
+      /\.app\.app--nav-collapsed > \.home-workspace,\s*\.app\.app--nav-collapsed > \.agent-workspace,\s*\.app\.app--nav-collapsed > \.assets-workspace,\s*\.app\.app--nav-collapsed > \.assetgen-workspace \{\s*grid-column: 1 \/ -1;/s.test(css),
+      "collapsed home/agent/assets/assetgen workspaces must span the single column",
+    );
+    assert.ok(
+      /\.app--rp-collapsed \.node-canvas \.node-studio-toolbar \{[^}]*margin-right: calc\(15px \+ 44px \+ var\(--wc-inset\)\)/s.test(css),
+      "the node canvas toolbar must clear the floating panel toggle when collapsed",
+    );
+  });
+
   it("exposes only a minimal bridge to the served UI", () => {
     const preload = src("desktop/preload.cjs");
     const served = preload.slice(preload.indexOf("} else {"));
