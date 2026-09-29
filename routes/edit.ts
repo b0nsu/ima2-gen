@@ -17,7 +17,7 @@ import {
   makeGenerationCanceledError,
   throwIfJobCanceled,
 } from "../lib/generationCancel.js";
-import { logEvent, logError } from "../lib/logger.js";
+import { logEvent, logError, logWarn } from "../lib/logger.js";
 import { hasPngAlphaChannel, parsePngInfo } from "../lib/pngInfo.js";
 import { verifyBufferAlpha } from "../lib/imageBackgroundParam.js";
 import { decodeRawForAlpha } from "../lib/alphaDecode.js";
@@ -288,10 +288,19 @@ export function registerEditRoutes(app: Express, ctxRaw: RouteRuntimeContext) {
       const kept = ctx.config.features?.preserveOutsideMask !== false && maskBuffer && sourceBuffer
         ? { mask: maskBuffer, source: sourceBuffer }
         : null;
-      const maskOutsidePreserved = kept !== null;
-      const editBuffer = kept
-        ? await preserveOutsideMask({ ...kept, result: providerBuffer, format: editExt })
-        : providerBuffer;
+      // The provider call is already paid for, so a failed composite falls back
+      // to the provider bytes instead of discarding the result with a 500.
+      let editBuffer: Buffer = providerBuffer;
+      let maskOutsidePreserved = false;
+      if (kept) {
+        try {
+          editBuffer = await preserveOutsideMask({ ...kept, result: providerBuffer, format: editExt });
+          maskOutsidePreserved = true;
+        } catch (compositeErr) {
+          const message = compositeErr instanceof Error ? compositeErr.message : String(compositeErr);
+          logWarn("edit", "mask_preserve_failed", { requestId, errorMessage: message.slice(0, 200) });
+        }
+      }
       const editB64 = maskOutsidePreserved ? editBuffer.toString("base64") : resultB64;
       throwIfJobCanceled(requestId);
       const createdAt = Date.now();

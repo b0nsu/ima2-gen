@@ -16,7 +16,8 @@ const { registerEditRoutes } = await import("../routes/edit.ts");
 const { _resetForTest: resetEventBus } = await import("../lib/eventBus.js");
 const { _resetForTests: resetInflight } = await import("../lib/inflight.js");
 const db = await import("../lib/db.js");
-(await import("../lib/logger.ts")).configureLogger({ level: "silent" });
+const { configureLogger } = await import("../lib/logger.ts");
+configureLogger({ level: "silent" });
 
 const originalFetch = globalThis.fetch;
 
@@ -183,6 +184,30 @@ describe("edit route mask preservation", () => {
       mask: (await leftHalfEditableMask()).toString("base64"),
     }, result.toString("base64"), { ...config.features, preserveOutsideMask: false });
     assert.ok(saved.equals(result));
+    assert.equal("maskOutsidePreserved" in meta, false);
+  });
+
+  it("falls back to the provider bytes when the composite fails", async () => {
+    const result = await noisyPng(W, H, 11);
+    // Signature + IHDR only: passes the header check but sharp cannot decode it.
+    const truncatedMask = (await leftHalfEditableMask()).subarray(0, 33);
+    const warnings: string[] = [];
+    configureLogger({ level: "warn", sink: { warn: (line: string) => warnings.push(line), error: () => {} } });
+    let outcome;
+    try {
+      outcome = await editOnce({
+        requestId: "mask_fail_1", image: (await noisyPng(W, H, 12)).toString("base64"),
+        mask: truncatedMask.toString("base64"),
+      }, result.toString("base64"));
+    } finally {
+      configureLogger({ level: "silent" });
+    }
+    const { saved, meta, responseImage } = outcome;
+    const failures = warnings.filter((line) => line.includes("mask_preserve_failed"));
+    assert.equal(failures.length, 1, warnings.join("\n"));
+    assert.ok(!failures[0]!.includes(result.toString("base64").slice(0, 32)));
+    assert.ok(saved.equals(result));
+    assert.ok(responseImage.equals(result));
     assert.equal("maskOutsidePreserved" in meta, false);
   });
 });

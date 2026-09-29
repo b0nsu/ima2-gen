@@ -26,4 +26,11 @@ describe("CLI config key discovery contract", () => {
     assert.match(src, /WRITABLE_CONFIG_KEYS/);
     assert.match(src, /KEY_TO_ENV/);
   });
+
+  it("exposes features.preserveOutsideMask to ima2 config set and capabilities", async () => {
+    const { WRITABLE_CONFIG_KEYS, KEY_TO_ENV } = await import("../lib/configKeys.ts");
+
+    assert.ok(WRITABLE_CONFIG_KEYS.has("features.preserveOutsideMask"));
+    assert.equal(KEY_TO_ENV["features.preserveOutsideMask"], "IMA2_PRESERVE_OUTSIDE_MASK");
+  });
 });
