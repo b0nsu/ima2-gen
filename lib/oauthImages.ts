@@ -21,6 +21,7 @@ import type {
   ResponseDiagnostics,
 } from "./responsesParse.js";
 import { postOAuthImages, postResponses } from "./responsesTransport.js";
+import { oauthRateLimitRetryConfig, withOAuthRateLimitRetry } from "./oauthRateLimit.js";
 
 export const OAUTH_IMAGE_TOOL = "image_gen";
 export const OAUTH_RENDER_MODEL = "gpt-image-2";
@@ -166,7 +167,21 @@ function extensionFor(mime: string) {
   return mime === "image/jpeg" ? "jpg" : mime === "image/webp" ? "webp" : "png";
 }
 
+/** Replay a call the backend rejected with a per-minute rate limit; log every wait. */
+function withRateLimitBackoff<T>(job: OAuthImageJob, stage: "plan" | "render", request: () => Promise<T>) {
+  return withOAuthRateLimitRetry(request, {
+    config: oauthRateLimitRetryConfig(job.ctx?.config?.oauth?.rateLimitRetry),
+    signal: job.signal,
+    onRetry: (info) => logEvent(job.scope, "rate_limit_retry", { requestId: job.requestId, stage, ...info }),
+    onExhausted: (info) => logEvent(job.scope, "rate_limit_exhausted", { requestId: job.requestId, stage, ...info }),
+  });
+}
+
 async function renderOne(job: OAuthImageJob, prompt: string) {
+  return withRateLimitBackoff(job, "render", () => renderOnce(job, prompt));
+}
+
+async function renderOnce(job: OAuthImageJob, prompt: string) {
   const fields = renderFields(job);
   if (!job.images.length) {
     return postOAuthImages({
@@ -214,17 +229,17 @@ function emptyDiagnostics(): ResponseDiagnostics {
 }
 
 async function plan(job: OAuthImageJob) {
-  let result = await postResponses({
+  let result = await withRateLimitBackoff(job, "plan", () => postResponses({
     ctx: job.ctx, provider: "oauth", scope: `${job.scope}-plan`, requestId: job.requestId,
     signal: job.signal, maxImages: 0, payload: buildPlannerPayload(job),
-  });
+  }));
   let prompts = promptsFromCalls(result.functionCalls, job.maxImages);
   if (!prompts.length) {
     logEvent(job.scope, "plan_retry", { requestId: job.requestId, events: result.eventCount });
-    result = await postResponses({
+    result = await withRateLimitBackoff(job, "plan", () => postResponses({
       ctx: job.ctx, provider: "oauth", scope: `${job.scope}-plan`, requestId: job.requestId,
       signal: job.signal, maxImages: 0, payload: buildPlannerPayload(job, true),
-    });
+    }));
     prompts = promptsFromCalls(result.functionCalls, job.maxImages);
   }
   return { result, prompts };

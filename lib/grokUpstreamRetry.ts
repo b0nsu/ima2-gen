@@ -46,7 +46,8 @@ export function isConnectionResetError(err: unknown): boolean {
     || msg.includes("socket hang up");
 }
 
-function retryAfterDelayMs(headers: Headers): number | undefined {
+/** Retry-After (seconds or HTTP date) in ms; also used by lib/oauthRateLimit.ts. */
+export function retryAfterDelayMs(headers: Headers): number | undefined {
   const raw = headers.get("retry-after")?.trim();
   if (!raw) return undefined;
   const seconds = Number(raw);
