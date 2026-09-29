@@ -137,7 +137,10 @@ function canceledError(cause: unknown) {
 export interface OAuthRateLimitBudget {
   retries: number;
   totalWaitMs: number;
-  /** Epoch ms no wait may reach (the job's generation timeout); undefined means none. */
+  /**
+   * Epoch ms no rate-limit wait may reach (the job's generation timeout); undefined means none.
+   * It bounds only the waits: each request keeps its own transport timeout.
+   */
   deadlineAt: number | undefined;
 }
 
@@ -189,7 +192,9 @@ export async function withOAuthRateLimitRetry<T>(request: () => Promise<T>, opti
     try {
       return await request();
     } catch (error) {
-      if (!isTransientOAuthRateLimit(error) || signal?.aborted) throw error;
+      if (!isTransientOAuthRateLimit(error)) throw error;
+      // A job canceled while its request was being rate limited ends as a cancel, not a 429.
+      if (signal?.aborted) throw canceledError(signal.reason ?? error);
       const waitMs = oauthRateLimitDelayMs(attempt, retryAfterOf(error), config, options.random);
       const reason = budgetShortfall(budget, config, waitMs, now());
       if (reason) {

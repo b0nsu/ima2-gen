@@ -221,23 +221,32 @@ describe("OAuth rate-limit backoff", () => {
   it("stops waiting as soon as the job is canceled", async () => {
     const controller = new AbortController();
     let calls = 0;
-    const started = Date.now();
+    const waits: number[] = [];
     const pending = withOAuthRateLimitRetry(async () => { calls++; throw rateLimited("transient"); },
-      { config: { ...CONFIG, baseDelayMs: 60_000, maxDelayMs: 60_000 }, signal: controller.signal });
-    setTimeout(() => controller.abort(), 20);
+      { config: { ...CONFIG, baseDelayMs: 60_000, maxDelayMs: 60_000 }, signal: controller.signal,
+        // The cancel lands during the first wait; the injected sleep rejects the way an aborted timer does.
+        sleep: async (ms) => { waits.push(ms); controller.abort(); throw new Error("aborted"); } });
     await assert.rejects(pending, (error: { status?: number; code?: string }) =>
       error.status === 499 && error.code === "GENERATION_CANCELED");
     assert.equal(calls, 1, "no request after the cancel");
-    assert.ok(Date.now() - started < 5000, "the 60s wait was cut short");
+    assert.equal(waits.length, 1, "one wait started, then the cancel ended the job");
   });
 
-  it("does not start a wait for an already canceled job", async () => {
+  it("reports a cancel, not the 429, for an already canceled job and starts no wait", async () => {
     const controller = new AbortController();
     controller.abort();
     const { waits, sleep } = recorder();
     const error = rateLimited("transient");
     await assert.rejects(withOAuthRateLimitRetry(async () => { throw error; }, { config: CONFIG, signal: controller.signal, sleep }),
-      (thrown) => thrown === error);
+      (thrown: { status?: number; code?: string }) => thrown.status === 499 && thrown.code === "GENERATION_CANCELED");
     assert.deepEqual(waits, []);
+  });
+
+  it("lets a non-rate-limit error surface unchanged even after a cancel", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const error = new Error("boom");
+    await assert.rejects(withOAuthRateLimitRetry(async () => { throw error; }, { config: CONFIG, signal: controller.signal }),
+      (thrown) => thrown === error);
   });
 });
