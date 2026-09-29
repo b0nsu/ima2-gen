@@ -321,6 +321,10 @@ cause/body/stack data; this does not claim arbitrary opaque free text is safe.
 | `IMA2_INFLIGHT_REAP_MS` | Inflight registry sweep interval |
 | `IMA2_OAUTH_STATUS_TIMEOUT_MS` | `/api/oauth/status` upstream timeout |
 | `IMA2_OAUTH_RESTART_DELAY_MS` | Legacy restart cooldown; unused by the in-process GPT OAuth client |
+| `IMA2_OAUTH_RATE_RETRY_MAX` | Retries per job (plan and renders share one budget) after a per-minute GPT OAuth rate limit (default 5, `0` disables); usage caps and quotas are never retried |
+| `IMA2_OAUTH_RATE_RETRY_BASE_MS` | Backoff base: waits `base × attempt` ms (default 8000) unless the reply says "try again in Ns" |
+| `IMA2_OAUTH_RATE_RETRY_MAX_MS` | Cap for a single rate-limit wait (default 45000); a wordless 429 whose `Retry-After` exceeds it is not retried |
+| `IMA2_OAUTH_RATE_RETRY_TOTAL_MS` | Cap for all rate-limit waits of one job (default 120000); a wait that would pass the generation timeout is skipped and the original error surfaces |
 | `IMA2_NO_OAUTH_PROXY` | Send GPT OAuth calls to an external OpenAI-compatible endpoint instead of ChatGPT |
 | `IMA2_CODEX_CLIENT_VERSION` | Codex client version sent to ChatGPT; default is the latest `@openai/codex` release, at least `0.157.0` |
 | `IMA2_RESEARCH_SUFFIX` | Optional suffix appended when research mode is on |
