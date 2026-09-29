@@ -3,7 +3,9 @@
  * Electron shell on macOS (`app--macos`) it carries the traffic-light inset —
  * the lights are painted by the window itself, so their center must sit on the
  * strip's 40px row (trafficLightPosition in desktop/lib/windows.mjs, pinned by
- * tests/desktop-titlebar-contract.test.ts). Page zoom (⌘+/⌘−) scales CSS px
+ * tests/desktop-titlebar-contract.test.ts). On Windows (`app--windows`) the
+ * window's overlay caption buttons sit in the top-right corner of the same row,
+ * so the right strip reserves --wc-inset instead. Page zoom (⌘+/⌘−) scales CSS px
  * but not the lights, so the row height and inset divide by --chrome-zoom
  * (set by syncDesktopChromeZoom) to stay fixed in screen points. The strip is a window-drag region;
  * buttons inside it are no-drag. Collapsed (`app--nav-collapsed`) hides the nav
@@ -19,12 +21,16 @@
   --chrome-top-h: calc(40px / var(--chrome-zoom, 1));
   /* Room reserved at the strip's left edge for the macOS traffic lights. */
   --tl-inset: 0px;
+  /* Room at the row's right edge for the Windows overlay caption buttons. */
+  --wc-inset: 0px;
   /* Visible width of the floating strip: inset + toggle + trailing button. */
   --chrome-strip-w: calc(var(--tl-inset) + 78px);
   /* Width of the right panel column (right-panel.css reads the same var). */
   --right-panel-w: 266px;
 }
 .app--macos { --tl-inset: calc(80px / var(--chrome-zoom, 1)); }
+/* The overlay paints min/max/close (~46px each) over the row's top-right. */
+.app--windows { --wc-inset: calc(138px / var(--chrome-zoom, 1)); }
 
 .sidebar-top {
   position: fixed;
@@ -175,6 +181,15 @@
   grid-column: 1 / -1;
 }
 
+/* Sidebar-less workspaces pin column 2 for the nav rail; collapsed, the rail
+   is gone and they own the single column instead of an implicit second track. */
+.app.app--nav-collapsed > .home-workspace,
+.app.app--nav-collapsed > .agent-workspace,
+.app.app--nav-collapsed > .assets-workspace,
+.app.app--nav-collapsed > .assetgen-workspace {
+  grid-column: 1 / -1;
+}
+
 /* ── Right panel toggle (mirrored strip at the top right) ────────────────────
  * Same 40px row as .sidebar-top, pinned to the window's top-right corner over
  * the right panel's column. The panel's content starts below the row, and a
@@ -203,13 +218,29 @@
 .app:not([data-mobile="1"]).app--rp-collapsed .panel-top {
   width: auto;
 }
+/* Without a panel toggle (Windows views with no right panel) the strip is only
+   the drag surface under the overlay caption buttons: hug that inset instead of
+   spanning the panel column, so it cannot swallow clicks on the workspace. */
+.panel-top[aria-hidden="true"] {
+  width: auto;
+}
 /* With the panel hidden, the horizontal history strip's right edge runs under
    the floating toggle — clear it like the left edge clears the strip. */
 .app:not([data-mobile="1"]).app--rp-collapsed.app--history-horizontal .history-strip {
-  padding-right: calc(12px + 44px);
+  padding-right: calc(12px + 44px + var(--wc-inset));
 }
-/* Settings view already hides the panel; hide its toggle too. */
-.app:not([data-mobile="1"]).app--settings-open .panel-top {
+/* The node canvas's top-right toolbar gets the same clearance — otherwise its
+   rightmost button sits under the floating toggle. */
+.app:not([data-mobile="1"]).app--rp-collapsed .node-canvas .node-studio-toolbar {
+  margin-right: calc(15px + 44px + var(--wc-inset));
+}
+/* The right-edge toggle clears the Windows overlay caption buttons. */
+.app--windows .panel-top {
+  padding-right: calc(8px + var(--wc-inset));
+}
+/* Settings view already hides the panel; hide its toggle too. On Windows the
+   strip stays mounted anyway — it is the drag surface under the overlay. */
+.app:not([data-mobile="1"]).app--settings-open:not(.app--windows) .panel-top {
   display: none;
 }
 

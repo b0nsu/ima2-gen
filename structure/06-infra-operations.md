@@ -63,6 +63,53 @@ graph TD
     SRV --> ADV["actual runtime URLs<br/>~/.ima2/server.json"]
 ```
 
+## Background runtime and desktop takeover
+
+Four launchers run the same `server.js`, and each marks its child so the advertise file and
+`/api/health` can say who started it (`lib/runtimeIdentity.ts`):
+
+| Launcher | Marker | Port |
+|---|---|---|
+| `ima2 serve` (terminal) | none → `foreground` | hops to the next free port when busy |
+| `ima2 start` | `IMA2_LAUNCHER=background` | pinned (`IMA2_STRICT_PORT=1`) |
+| login service (launchd / systemd) | `IMA2_SERVICE=1` → `service` | hops |
+| desktop app | `IMA2_DESKTOP=1` → `desktop` | pinned |
+
+`ima2 start` and the desktop choose the boot id themselves (`IMA2_BOOT_ID`). `ima2 start` waits for a health
+answer carrying that pid and boot id. The desktop reads its child's stdout (running line, stop-intent line)
+and checks the boot id with one health probe afterwards, logging a mismatch.
+
+`bin/lib/runtime.ts` answers "what runs here" with three values. `live` names the server that
+answered; `absent-proven` means the advertised URL and every port from the configured one to
++20 refused the connection; anything else is `unknown` and must not be read as absence. Service
+ownership comes from the live manager (`bin/lib/serviceManager.ts`): a server belongs to the login
+service only when launchd or systemd reports its pid; a manager that cannot be asked is `unknown`,
+and destructive commands refuse it even with `--force`.
+
+At launch the desktop runs its bundled CLI (`bin/ima2.js status --runtime --json` with the app's port
+and config dir) and decides (`desktop/lib/startup-decision.mjs`):
+
+| Answer | Action |
+|---|---|
+| bundled CLI failed, incomplete answer, or `unknown` | blocked with the reason; no spawn |
+| `absent-proven`, no active login service for this config dir | start the bundled server |
+| `absent-proven`, login service for this config dir is active | wait up to 20 s for it, then blocked |
+| `live`, launcher `desktop` from this app bundle | attach |
+| `live`, other launcher | per setting `existingServer`: `ask` (default; login launches never prompt), `attach`, `takeover` |
+| `live` but not stoppable (no advertisement) or ownership `unknown` | attach as guest; takeover unavailable |
+
+A takeover re-reads the status, requires the same pid and boot id (or start time for older
+servers), runs `ima2 stop --json --expect-pid ... [--service]`, waits for three refused probes, then
+starts the bundled server. A stop or quit during any of this cancels it (generation guard in
+`desktop/lib/server.mjs`). When the app's own child prints `IMA2_STOP_INTENT <bootId>` (from
+`POST /api/admin/stop`) and exits 0, the app shows "stopped" instead of restarting it; any other exit
+keeps the crash-restart policy.
+
+Verification: `tests/runtime-*.test.ts`, `tests/stop-json-contract.test.ts`,
+`tests/service-manager-parse.test.ts`, `tests/desktop-{startup-decision,runtime-cli,takeover,server-supervisor}.test.ts`.
+The packaged GUI prompt and tray item are checked by hand.
+
+
 ## Package Contract
 
 | Item | Current value |
@@ -177,11 +224,12 @@ separate follow-up proof.
 | `npm run test:install-policy:npm12` | npm pending-script oracle | Require npm 12 to report no pending root/UI install scripts |
 | `npm run verify:release:source` | canonical source gate | Native imports, typechecks, inventory, builds, full tests, package lint, install policy, root production audit, and UI build-dependency audit |
 | `npm run verify:release` | canonical release gate | Source gate plus a real packed-package install and server smoke |
+| `npm run build:release` | stable-lane package build | UI, server and CLI builds plus package lint; the stable publish packs with it because the same gitHead already passed `verify:release:source` on the preview lane |
 | `npm run docs:refresh-line-counts` | `node scripts/refresh-structure-line-counts.mjs` | Refresh `structure/01-file-function-map.md` lib/bin/route line counts; pass `--check` in CI |
 | `prepack` | `ui:build && build:server && build:cli` | Rebuild runtime artifacts (UI, server, CLI) before tarball |
 | `prepublishOnly` | OIDC context assertion + `verify:release` | Blocks accidental directory publishing outside the registered OIDC workflow; the workflow publishes only its already-tested tarball with lifecycle scripts disabled. |
 
-`release:*` scripts dispatch `.github/workflows/release.yml`, which runs the verified preview -> stable-tag OIDC flow in CI and creates the GitHub Release only after npm proof. Agents must not run them unless the user explicitly asks.
+`npm run release -- <patch|minor|major>` (and the `release:*` shortcuts) run `scripts/release.mjs`: optional dev -> main promotion (`--promote`), a `release.yml` dispatch pinned by `expected_sha`, run watching, and approval of this release's `npm-stable`/`desktop-production` deployments with `--approve`. `release.yml` runs the verified preview -> stable-tag OIDC flow in CI and creates the GitHub Release only after npm proof. Agents must not run them unless the user explicitly asks.
 
 ## Config And Data Locations
 
@@ -314,7 +362,7 @@ Scoped `workflow_dispatch` with `publish_ref`/`publish_sha` is also supported; G
 
 Codex login uses the package-local JavaScript bin with `cli_auth_credentials_store="file"`; the proxy requires a concrete auth file passed through `--oauth-file`. A keyring-only session is not proxy-ready. Publishers download the tested artifacts, recheck live refs, publish immutable bytes and verify registry/tag/integrity/Sigstore provenance. The stable follow-on creates the GitHub Release and attaches its manifest/SBOM; the TGZ is available from npm and the Actions artifact, not assumed to be a GitHub Release attachment. `verify-existing` recovers already-published versions without republishing. Repository, workflow, allowed ref, source commit, original run/attempt, GitHub-hosted builder and subject SHA-512 must agree; `npm audit signatures` performs cryptographic verification. A failed-job rerun checks immutable registry state before deciding whether publishing is necessary.
 
-`.github/workflows/release.yml` owns the cut. Its baseline must equal origin/main and contain dev/preview and the recorded required-unit commits. It creates the version commit, runs release verification, and proves exact-candidate CI through a leased candidate ref **before** moving main/preview. It then publishes/verifies preview. The `npm-stable` environment gates tagging; after preview proof and unmoved-ref checks, the tag job atomically pushes main/dev/tag and dispatches stable publication. Both cut/tag jobs have scoped contents/actions writes and no OIDC publication permission. `expected_sha` guards the caller's chosen baseline; real release, dry-run and canary modes remain distinct.
+`.github/workflows/release.yml` owns the cut. Its baseline must equal origin/main and contain dev/preview and the recorded required-unit commits. It creates the version commit and runs release verification **before** moving main/preview. CI proof then comes from one of two paths: when the version commit changes only `package.json`/`package-lock.json`, `wait-ci-gate.mjs reuse-push` requires a green push-event `ci.yml` run on main for the parent SHA with the `ci`, test, windows, macOS-install and e2e jobs all run and successful (it waits while that run is in progress; a red run fails the cut); otherwise, and always in canary mode, it proves exact-candidate CI through a leased candidate ref. It then publishes/verifies preview. The `npm-stable` environment gates tagging; after preview proof and unmoved-ref checks, the tag job atomically pushes main/dev/tag, pushes `desktop-v<version>` (an existing tag must already point at the release SHA) and dispatches `desktop.yml` on it so desktop packaging overlaps the stable publication it then dispatches, and after the stable publish dispatches `pages.yml`. The desktop and Pages dispatches are non-fatal and the run summary carries their re-dispatch commands. Both cut/tag jobs have scoped contents/actions writes and no OIDC publication permission. `expected_sha` guards the caller's chosen baseline; real release, dry-run and canary modes remain distinct.
 
 `publish.yml` is reached by `workflow_dispatch` as well as by its original preview/tag pushes, because a push authenticated with `GITHUB_TOKEN` emits no workflow event; without that dispatch a CI-minted tag would leave an immutable tag with no npm package. The dispatch cannot widen what may be published: `PUBLISH_REF`/`PUBLISH_SHA` feed the same `classifyPublish`, which still accepts only `refs/heads/preview` or a `v*` tag matching `package.json`, and stable publishing still requires `main`, `dev`, `preview`, and the tag to share one SHA plus a matching npm preview `gitHead`. Every checkout in that workflow pins the published SHA so a dispatch cannot package the default branch. Recovery for an already-published version is the `verify-existing` job, which reuses `ensure-github-release`.
 
@@ -457,3 +505,4 @@ Next document: `[[07-devlog-map]]`
 - 2026-07-14: OIDC publish now creates/refreshes GitHub Releases for stable tags after npm proof (`create-github-release` job + `ensure-github-release`), so Releases no longer depend on local finalize alone.
 - 2026-08-12: Retired `scripts/release.sh` and `scripts/release-preview.sh`. `.github/workflows/release.yml` now runs the whole cut in CI and reaches `publish.yml` by `workflow_dispatch`, since a `GITHUB_TOKEN` push emits no workflow event. `publish.yml` keeps its push triggers, remains the only holder of `id-token: write`, and resolves the released ref through `PUBLISH_REF`/`PUBLISH_SHA` so every checkout and contract call targets the release SHA. The audit gate also gained per-advisory exceptions (`scripts/audit-exceptions.json`) that require a GHSA id, evidence, and an enforced expiry.
 - 2026-09-09: Removed the bundled progrok child process from the `grok` lane. The lane now calls `https://api.x.ai` directly with the xAI OAuth session in `~/.progrok/auth.json`, refreshed automatically two minutes before expiry; the file is shared with the progrok CLI when a user has it installed, but ima2 no longer bundles or spawns it. There is no local Grok proxy and no port 18645, so `IMA2_GROK_PROXY_HOST`, `IMA2_GROK_PROXY_PORT`, `IMA2_NO_GROK_PROXY`, and `IMA2_GROK_RESTART_*` are no longer read. `ima2 grok` is now `login` / `status` / `logout`, and `/api/health` and `~/.ima2/server.json` publish `grok: { auth: "oauth" | "none" }`. The risk this accepts: xAI documents only `/v1/me` as accepting an OAuth token, so the image and video calls ride an undocumented path that progrok also relied on; if it closes, `grok-api` with `XAI_API_KEY` is the documented fallback.
+- 2026-09-27: Shorter release path. The cut reuses main's push CI for version-only commits instead of re-running the full matrix on a candidate ref; the stable package job builds with `build:release` because the preview lane already ran the source gate on the same gitHead; the tag job starts the desktop release (desktop-v tag + `desktop.yml` dispatch on the tag ref) in parallel with the npm stable publish and dispatches Pages afterwards; `npm run release` (`scripts/release.mjs`) replaces the hand-run promotion/dispatch/approval sequence. The same change (unit 260927_release_pipeline_simplify) runs PR and CI e2e spec files on three Playwright workers.
