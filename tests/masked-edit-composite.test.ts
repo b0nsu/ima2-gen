@@ -29,7 +29,7 @@ afterEach(() => {
 
 after(async () => {
   db.closeDb();
-  await rm(TEST_DIR, { recursive: true, force: true });
+  await rm(TEST_DIR, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 });
 
 const W = 8;
