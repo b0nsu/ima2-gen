@@ -362,6 +362,7 @@ Config priority is `environment variables > ~/.ima2/config.json > built-in defau
 | `IMA2_GROK_VIDEO_MODEL_DEFAULT` | `grok-imagine-video-1.5` | Default Grok video model |
 | `IMA2_GROK_GENERATION_TIMEOUT_MS` | `300000` | Timeout for the final Grok Images API call |
 | `IMA2_OAUTH_MASKED_EDIT_ENABLED` | `false` | Opt-in feature flag for masked-edit requests on the OAuth path (#31, groundwork only) |
+| `IMA2_PRESERVE_OUTSIDE_MASK` | `true` | Restore source pixels wherever an edit mask is opaque, so masked edits cannot redraw the kept area (`0` keeps the raw provider result) |
 | `GEMINI_API_KEY` | — | API key for `provider: "gemini-api"` direct Generative Language API path |
 | `VERTEX_SERVICE_ACCOUNT_JSON` | — | Google service account JSON for Vertex AI auth with `provider: "gemini-api"`; takes priority over `GEMINI_API_KEY` when both are set |
 | `IMA2_AGY_BIN` | `agy` on PATH | Explicit path to the Antigravity CLI binary for `provider: "agy"` |
