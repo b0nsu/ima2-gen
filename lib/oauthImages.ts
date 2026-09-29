@@ -21,7 +21,12 @@ import type {
   ResponseDiagnostics,
 } from "./responsesParse.js";
 import { postOAuthImages, postResponses } from "./responsesTransport.js";
-import { oauthRateLimitRetryConfig, withOAuthRateLimitRetry } from "./oauthRateLimit.js";
+import {
+  createOAuthRateLimitBudget,
+  oauthRateLimitRetryConfig,
+  withOAuthRateLimitRetry,
+  type OAuthRateLimitBudget,
+} from "./oauthRateLimit.js";
 
 export const OAUTH_IMAGE_TOOL = "image_gen";
 export const OAUTH_RENDER_MODEL = "gpt-image-2";
@@ -167,18 +172,27 @@ function extensionFor(mime: string) {
   return mime === "image/jpeg" ? "jpg" : mime === "image/webp" ? "webp" : "png";
 }
 
+/**
+ * One retry budget per job: the plan and every render draw from the same retry count and total
+ * wait, and no wait may run past the job's generation timeout.
+ */
+function rateLimitBudgetFor(job: OAuthImageJob): OAuthRateLimitBudget {
+  return createOAuthRateLimitBudget(job.ctx?.config?.oauth?.generationTimeoutMs ?? 400 * 1000);
+}
+
 /** Replay a call the backend rejected with a per-minute rate limit; log every wait. */
-function withRateLimitBackoff<T>(job: OAuthImageJob, stage: "plan" | "render", request: () => Promise<T>) {
+function withRateLimitBackoff<T>(job: OAuthImageJob, budget: OAuthRateLimitBudget, stage: "plan" | "render", request: () => Promise<T>) {
   return withOAuthRateLimitRetry(request, {
     config: oauthRateLimitRetryConfig(job.ctx?.config?.oauth?.rateLimitRetry),
+    budget,
     signal: job.signal,
     onRetry: (info) => logEvent(job.scope, "rate_limit_retry", { requestId: job.requestId, stage, ...info }),
     onExhausted: (info) => logEvent(job.scope, "rate_limit_exhausted", { requestId: job.requestId, stage, ...info }),
   });
 }
 
-async function renderOne(job: OAuthImageJob, prompt: string) {
-  return withRateLimitBackoff(job, "render", () => renderOnce(job, prompt));
+async function renderOne(job: OAuthImageJob, budget: OAuthRateLimitBudget, prompt: string) {
+  return withRateLimitBackoff(job, budget, "render", () => renderOnce(job, prompt));
 }
 
 async function renderOnce(job: OAuthImageJob, prompt: string) {
@@ -228,15 +242,15 @@ function emptyDiagnostics(): ResponseDiagnostics {
   };
 }
 
-async function plan(job: OAuthImageJob) {
-  let result = await withRateLimitBackoff(job, "plan", () => postResponses({
+async function plan(job: OAuthImageJob, budget: OAuthRateLimitBudget) {
+  let result = await withRateLimitBackoff(job, budget, "plan", () => postResponses({
     ctx: job.ctx, provider: "oauth", scope: `${job.scope}-plan`, requestId: job.requestId,
     signal: job.signal, maxImages: 0, payload: buildPlannerPayload(job),
   }));
   let prompts = promptsFromCalls(result.functionCalls, job.maxImages);
   if (!prompts.length) {
     logEvent(job.scope, "plan_retry", { requestId: job.requestId, events: result.eventCount });
-    result = await withRateLimitBackoff(job, "plan", () => postResponses({
+    result = await withRateLimitBackoff(job, budget, "plan", () => postResponses({
       ctx: job.ctx, provider: "oauth", scope: `${job.scope}-plan`, requestId: job.requestId,
       signal: job.signal, maxImages: 0, payload: buildPlannerPayload(job, true),
     }));
@@ -250,9 +264,10 @@ export async function runOAuthImageJob(job: OAuthImageJob): Promise<OAuthImageJo
   // prompt per stage, so it goes through the planner (its user text already carries the
   // sequence instructions and the Direct fidelity rule).
   const direct = job.mode === "direct" && job.maxImages <= 1;
+  const budget = rateLimitBudgetFor(job);
   const planned = direct
     ? { result: null, prompts: Array.from({ length: Math.max(1, job.maxImages) }, () => job.directPrompt) }
-    : await plan(job);
+    : await plan(job, budget);
   const base = planned.result;
   const usage: Record<string, number> = {};
   addUsage(usage, base?.usage);
@@ -272,7 +287,7 @@ export async function runOAuthImageJob(job: OAuthImageJob): Promise<OAuthImageJo
     while (cursor < planned.prompts.length) {
       const index = cursor++;
       try {
-        slots[index]?.resolve({ status: "done", value: await renderOne(job, planned.prompts[index] as string) });
+        slots[index]?.resolve({ status: "done", value: await renderOne(job, budget, planned.prompts[index] as string) });
       } catch (error) {
         slots[index]?.resolve({ status: "failed", error });
       }

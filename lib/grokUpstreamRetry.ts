@@ -67,7 +67,12 @@ export function retryBackoffDelayMs(attempt: number, opts: RetryBackoffOptions):
   const retryAfter = opts.headers ? retryAfterDelayMs(opts.headers) : undefined;
   if (retryAfter !== undefined) return Math.min(retryAfter, opts.maxDelayMs);
   const exp = Math.min(opts.baseDelayMs * (2 ** attempt), opts.maxDelayMs);
-  return Math.floor(exp * (0.8 + Math.random() * 0.4));
+  return jitterDelayMs(exp);
+}
+
+/** Spread a wait by ±20% so callers blocked in the same instant do not retry in lockstep. */
+export function jitterDelayMs(ms: number, random: () => number = Math.random): number {
+  return Math.floor(ms * (0.8 + random() * 0.4));
 }
 
 function abortError(signal?: AbortSignal): unknown {

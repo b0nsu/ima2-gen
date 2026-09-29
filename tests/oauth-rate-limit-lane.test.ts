@@ -50,6 +50,16 @@ if (executionTestProcess(import.meta.url)) describe("GPT OAuth rate-limit backof
     });
   });
 
+  it("a wordless 429 whose Retry-After exceeds one wait is not retried", async () => {
+    const bare = () => new Response("", { status: 429, headers: { "retry-after": "3600" } });
+    await harness.run("classic", { upstream: bare }, async (f) => {
+      const response = await f.post(BASE);
+      assert.notEqual(response.status, 200);
+      await f.waitSettled();
+      assert.deepEqual(f.calls.map(endpointOf), ["/v1/images/generations"]);
+    });
+  });
+
   it("a usage cap is not retried and nothing is saved", async () => {
     await harness.run("classic", { upstream: () => rejection("The usage limit has been reached", "usage_limit_reached") }, async (f) => {
       const response = await f.post(BASE);

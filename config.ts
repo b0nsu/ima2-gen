@@ -276,6 +276,8 @@ export const config = {
       maxRetries: pickInt(env.IMA2_OAUTH_RATE_RETRY_MAX, fileCfg.oauth?.rateLimitRetry?.maxRetries, 5),
       baseDelayMs: pickInt(env.IMA2_OAUTH_RATE_RETRY_BASE_MS, fileCfg.oauth?.rateLimitRetry?.baseDelayMs, 8000),
       maxDelayMs: pickInt(env.IMA2_OAUTH_RATE_RETRY_MAX_MS, fileCfg.oauth?.rateLimitRetry?.maxDelayMs, 45_000),
+      // Retries and this total wait are one budget per job (plan + renders), inside generationTimeoutMs.
+      maxTotalWaitMs: pickInt(env.IMA2_OAUTH_RATE_RETRY_TOTAL_MS, fileCfg.oauth?.rateLimitRetry?.maxTotalWaitMs, 120_000),
     },
     // Provider-backed masked edit is off until upstream STEP-0 verification is recorded.
     maskedEditEnabled: pickBool(
