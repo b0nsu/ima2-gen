@@ -82,7 +82,7 @@ after(async () => {
     if (value === undefined) delete process.env[key];
     else process.env[key] = value;
   }
-  if (rootDir) await rm(rootDir, { recursive: true, force: true });
+  if (rootDir) await rm(rootDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   grokAuth?.cleanup();
 });
 
@@ -268,7 +268,9 @@ describe("provider surface HTTP boundaries", { concurrency: false }, () => {
         const result = await res.json();
         assert.equal(res.status, 200);
         assert.equal(result.provider, provider);
-        assert.equal(result.image, `data:image/png;base64,${image}`);
+        // The fixture echoes the source, so the mask-preserving composite decodes to the same pixels.
+        const returned = await sharp(Buffer.from(result.image.replace(/^data:image\/png;base64,/, ""), "base64")).raw().toBuffer();
+        assert.deepEqual(returned, await sharp(Buffer.from(image, "base64")).raw().toBuffer());
         assert.equal(calls.length, 1);
         assert.equal(calls[0].url, provider === "api" ? "https://api.openai.com/v1/responses" : "http://oauth-fixture.invalid/v1/responses");
         assert.equal(new Headers(calls[0].init.headers).get("Authorization"), provider === "api" ? "Bearer sk-fixture-only" : null);

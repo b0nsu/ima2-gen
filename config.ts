@@ -270,6 +270,15 @@ export const config = {
       400 * 1000,
     ),
     restartDelayMs: pickInt(env.IMA2_OAUTH_RESTART_DELAY_MS, fileCfg.oauth?.restartDelayMs, 5000),
+    // Backoff for per-minute rate limits (HTTP 429 "... per min", "try again in Ns"); usage caps
+    // and quotas are never retried. See lib/oauthRateLimit.ts.
+    rateLimitRetry: {
+      maxRetries: pickInt(env.IMA2_OAUTH_RATE_RETRY_MAX, fileCfg.oauth?.rateLimitRetry?.maxRetries, 5),
+      baseDelayMs: pickInt(env.IMA2_OAUTH_RATE_RETRY_BASE_MS, fileCfg.oauth?.rateLimitRetry?.baseDelayMs, 8000),
+      maxDelayMs: pickInt(env.IMA2_OAUTH_RATE_RETRY_MAX_MS, fileCfg.oauth?.rateLimitRetry?.maxDelayMs, 45_000),
+      // Retries and this total wait are one budget per job (plan + renders), inside generationTimeoutMs.
+      maxTotalWaitMs: pickInt(env.IMA2_OAUTH_RATE_RETRY_TOTAL_MS, fileCfg.oauth?.rateLimitRetry?.maxTotalWaitMs, 120_000),
+    },
     // Provider-backed masked edit is off until upstream STEP-0 verification is recorded.
     maskedEditEnabled: pickBool(
       env.IMA2_OAUTH_MASKED_EDIT_ENABLED,
@@ -450,6 +459,10 @@ export const config = {
   },
   features: {
     cardNews: pickBool(env.IMA2_CARD_NEWS, fileCfg.features?.cardNews, env.IMA2_DEV === "1"),
+    // Masked edits restore the source wherever the mask is opaque, because GPT Image
+    // treats the mask as guidance and may redraw the kept area. Opt out with
+    // IMA2_PRESERVE_OUTSIDE_MASK=0 to keep the raw provider result.
+    preserveOutsideMask: pickBool(env.IMA2_PRESERVE_OUTSIDE_MASK, fileCfg.features?.preserveOutsideMask, true),
   },
   cardNewsPlanner: {
     enabled: pickBool(env.IMA2_CARD_NEWS_PLANNER, fileCfg.cardNewsPlanner?.enabled, true),

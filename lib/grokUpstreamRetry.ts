@@ -46,7 +46,8 @@ export function isConnectionResetError(err: unknown): boolean {
     || msg.includes("socket hang up");
 }
 
-function retryAfterDelayMs(headers: Headers): number | undefined {
+/** Retry-After (seconds or HTTP date) in ms; also used by lib/oauthRateLimit.ts. */
+export function retryAfterDelayMs(headers: Headers): number | undefined {
   const raw = headers.get("retry-after")?.trim();
   if (!raw) return undefined;
   const seconds = Number(raw);
@@ -66,7 +67,12 @@ export function retryBackoffDelayMs(attempt: number, opts: RetryBackoffOptions):
   const retryAfter = opts.headers ? retryAfterDelayMs(opts.headers) : undefined;
   if (retryAfter !== undefined) return Math.min(retryAfter, opts.maxDelayMs);
   const exp = Math.min(opts.baseDelayMs * (2 ** attempt), opts.maxDelayMs);
-  return Math.floor(exp * (0.8 + Math.random() * 0.4));
+  return jitterDelayMs(exp);
+}
+
+/** Spread a wait by ±20% so callers blocked in the same instant do not retry in lockstep. */
+export function jitterDelayMs(ms: number, random: () => number = Math.random): number {
+  return Math.floor(ms * (0.8 + random() * 0.4));
 }
 
 function abortError(signal?: AbortSignal): unknown {

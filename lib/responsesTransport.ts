@@ -12,6 +12,7 @@ import {
 } from "./responsesParse.js";
 import { waitForOAuthReady } from "./oauthProxy.js";
 import { oauthFetch } from "./codexBackend/index.js";
+import { oauthRateLimitFields, oauthRateLimitRetryConfig } from "./oauthRateLimit.js";
 
 interface MakeErrorOptions {
   status?: number | undefined;
@@ -85,6 +86,16 @@ function safeUpstreamClientMessage(upstream: UpstreamError | null | undefined, s
   if (status === 401 || status === 403) return "OpenAI authentication failed.";
   if (status === 429) return "OpenAI rate limited the image request.";
   return "OpenAI rejected the image request.";
+}
+
+/**
+ * Rate-limit kind and wait hint for a rejected GPT OAuth call, read from the raw upstream text
+ * before the client message is redacted. Only the kind and a number leave this function.
+ */
+function rateLimitFieldsOf(ctx: RouteRuntimeContext, res: Response, upstream: UpstreamError | null, text: string) {
+  const raw = upstream ? [upstream.message, upstream.code, upstream.type].filter(Boolean).join(" ") : text.slice(0, 2000);
+  const { maxDelayMs } = oauthRateLimitRetryConfig(ctx?.config?.oauth?.rateLimitRetry);
+  return oauthRateLimitFields(res.status, raw, res.headers, maxDelayMs);
 }
 
 function apiAuthorizationHeader(apiKey: string | undefined) {
@@ -190,6 +201,7 @@ export async function postResponses({
     if (!res.ok) {
       const text = await res.text();
       const upstream = parseOpenAIErrorBody(text);
+      const rateLimit = provider === "api" ? {} : rateLimitFieldsOf(ctx, res, upstream, text);
       if (res.status >= 400 && res.status < 500 && upstream?.message) {
         throw makeError(safeUpstreamClientMessage(upstream, res.status), {
           status: res.status,
@@ -199,11 +211,13 @@ export async function postResponses({
           upstreamType: upstream.type,
           upstreamParam: upstream.param,
           upstreamMessageRedacted: true,
+          ...rateLimit,
         });
       }
       throw makeError(`${provider === "api" ? "OpenAI API" : "OAuth proxy"} returned ${res.status}`, {
         status: res.status,
         upstreamBodyChars: text.length,
+        ...rateLimit,
       });
     }
     if (requestId) setJobPhase(requestId, "streaming");
@@ -283,6 +297,7 @@ export async function postOAuthImages({
     const text = await res.text();
     if (!res.ok) {
       const upstream = parseOpenAIErrorBody(text);
+      const rateLimit = rateLimitFieldsOf(ctx, res, upstream, text);
       if (res.status >= 400 && res.status < 500 && upstream?.message) {
         throw makeError(safeUpstreamClientMessage(upstream, res.status), {
           status: res.status,
@@ -292,9 +307,10 @@ export async function postOAuthImages({
           upstreamType: upstream.type,
           upstreamParam: upstream.param,
           upstreamMessageRedacted: true,
+          ...rateLimit,
         });
       }
-      throw makeError(`GPT OAuth returned ${res.status}`, { status: res.status, upstreamBodyChars: text.length });
+      throw makeError(`GPT OAuth returned ${res.status}`, { status: res.status, upstreamBodyChars: text.length, ...rateLimit });
     }
     let parsed: { data?: Array<{ b64_json?: unknown }>; usage?: Record<string, number>; background?: unknown; output_format?: unknown };
     try {
