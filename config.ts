@@ -450,6 +450,10 @@ export const config = {
   },
   features: {
     cardNews: pickBool(env.IMA2_CARD_NEWS, fileCfg.features?.cardNews, env.IMA2_DEV === "1"),
+    // Masked edits restore the source wherever the mask is opaque, because GPT Image
+    // treats the mask as guidance and may redraw the kept area. Opt out with
+    // IMA2_PRESERVE_OUTSIDE_MASK=0 to keep the raw provider result.
+    preserveOutsideMask: pickBool(env.IMA2_PRESERVE_OUTSIDE_MASK, fileCfg.features?.preserveOutsideMask, true),
   },
   cardNewsPlanner: {
     enabled: pickBool(env.IMA2_CARD_NEWS_PLANNER, fileCfg.cardNewsPlanner?.enabled, true),

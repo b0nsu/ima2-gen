@@ -28,6 +28,7 @@ import { requireRuntimeContext, type RouteRuntimeContext, type RuntimeContext } 
 import { errorEnvelopeFields } from "../lib/errors/envelope.js";
 import { upstreamLabelFields } from "../lib/diagnosticLabel.js";
 import { getProviderSurfaceSupport } from "../lib/providers/derive.js";
+import { preserveOutsideMask } from "../lib/maskedEditComposite.js";
 function validateModeration(ctx: RuntimeContext, moderation: unknown) {
   if (typeof moderation !== "string" || !ctx.config.oauth.validModeration.has(moderation)) {
     return { error: "moderation must be one of: auto, low" };
@@ -74,6 +75,8 @@ function decodePngDataUrl(value: unknown, invalidCode: string, pngCode: string):
 interface MaskValidationResult {
   mask?: string | null | undefined;
   maskBytes?: number | undefined;
+  maskBuffer?: Buffer | undefined;
+  sourceBuffer?: Buffer | undefined;
   error?: string | undefined;
   code?: string | undefined;
 }
@@ -92,11 +95,11 @@ function validateEditMask(imageB64: unknown, mask: unknown): MaskValidationResul
     return { error: "mask PNG must include an alpha channel", code: "EDIT_MASK_NO_ALPHA" };
   }
   const imageCheck = decodePngDataUrl(imageB64, "INVALID_EDIT_IMAGE_BASE64", "INVALID_EDIT_IMAGE_PNG");
-  if (imageCheck.error || !imageCheck.info) return imageCheck;
+  if (imageCheck.error || !imageCheck.buffer || !imageCheck.info) return imageCheck;
   if (imageCheck.info.width !== maskCheck.info.width || imageCheck.info.height !== maskCheck.info.height) {
     return { error: "mask dimensions must match image dimensions", code: "EDIT_MASK_DIMENSION_MISMATCH" };
   }
-  return { mask: maskCheck.b64, maskBytes: maskCheck.buffer.length };
+  return { mask: maskCheck.b64, maskBytes: maskCheck.buffer.length, maskBuffer: maskCheck.buffer, sourceBuffer: imageCheck.buffer };
 }
 
 export function registerEditRoutes(app: Express, ctxRaw: RouteRuntimeContext) {
@@ -278,7 +281,19 @@ export function registerEditRoutes(app: Express, ctxRaw: RouteRuntimeContext) {
         ? (resultMimeFromProvider || detectImageMimeFromB64(resultB64) || "image/png")
         : "image/png";
       const editExt = activeProvider === "grok" || activeProvider === "agy" || activeProvider === "grok-api" || activeProvider === "gemini-api" || activeProvider === "atlascloud" || activeProvider === "minimax" || activeProvider === "nai" ? imageFormatFromMime(editMime) : "png";
-      const editBuffer = Buffer.from(resultB64, "base64");
+      const providerBuffer = Buffer.from(resultB64, "base64");
+      // Masks are guidance for GPT Image models; restore the source wherever the
+      // mask is opaque so a masked edit cannot redraw the area the user kept.
+      const { maskBuffer, sourceBuffer } = maskCheck;
+      const kept = ctx.config.features?.preserveOutsideMask !== false && maskBuffer && sourceBuffer
+        ? { mask: maskBuffer, source: sourceBuffer }
+        : null;
+      const maskOutsidePreserved = kept !== null;
+      const editBuffer = kept
+        ? await preserveOutsideMask({ ...kept, result: providerBuffer, format: editExt })
+        : providerBuffer;
+      const editB64 = maskOutsidePreserved ? editBuffer.toString("base64") : resultB64;
+      throwIfJobCanceled(requestId);
       const createdAt = Date.now();
       // Semantic alpha verification: at least one pixel with alpha < 255.
       // Never trust provider mime for transparency claims (same doctrine as
@@ -332,20 +347,21 @@ export function registerEditRoutes(app: Express, ctxRaw: RouteRuntimeContext) {
         webSearchCalls,
         webSearchEnabled,
         ...(providerUrl ? { providerUrl } : {}),
+        ...(maskOutsidePreserved ? { maskOutsidePreserved: true } : {}),
       };
       await safeWriteSidecar(join(ctx.config.storage.generatedDir, filename + ".json"), meta);
       invalidateHistoryIndex();
       finishHttpStatus = 200;
-      finishMeta = { filename, imageChars: resultB64.length };
+      finishMeta = { filename, imageChars: editB64.length };
       logEvent("edit", "saved", {
         requestId,
         filename,
-        imageChars: resultB64.length,
+        imageChars: editB64.length,
         elapsedMs: Date.now() - startTime,
       });
 
       res.json({
-        image: `data:${editMime};base64,${resultB64}`,
+        image: `data:${editMime};base64,${editB64}`,
         elapsed,
         reasoningEffort,
         filename,

@@ -70,7 +70,7 @@ Image generation supports OAuth, API-key, Grok, and Gemini (`agy` and `gemini-ap
 - API-key generation covers classic generate, edit, mask-guided edit, multimode, and node generation.
 - If `provider: "api"` is requested without an API key, routes fail before upstream with `401` and `API_KEY_REQUIRED`.
 - Grok generation maps `size` to xAI `aspect_ratio` and `resolution`; it does not send an OpenAI-style `size` field upstream. Grok edit uses xAI `/v1/images/edits`; Grok mask edit remains unsupported and returns `GROK_MASK_UNSUPPORTED`.
-- Mask edits are mask/selection guided edits, not pixel-perfect inpaint guarantees.
+- Mask edits are mask/selection guided edits. The model may redraw outside the mask, so the edit route restores source pixels wherever the mask is opaque before saving (`features.preserveOutsideMask`, env `IMA2_PRESERVE_OUTSIDE_MASK`, default on; the sidecar records `maskOutsidePreserved: true`). The output keeps the source dimensions.
 
 Grok video generation uses `POST /api/video/generate` (SSE). See the Video
 Generation section below for the full endpoint specification.
@@ -406,7 +406,7 @@ Custom sizes are reduced to the closest xAI-supported aspect ratio and use
 
 Image edit / image-to-image generation.
 
-The request includes a prompt and image payload. `provider: "api"` sends the prompt and image through the shared Responses image adapter. Optional masks are forwarded as mask guidance, not a pixel-perfect edit guarantee.
+The request includes a prompt and image payload. `provider: "api"` sends the prompt and image through the shared Responses image adapter. Optional masks are forwarded as mask guidance; after the provider returns, pixels where the mask is opaque are restored from the source image (see `IMA2_PRESERVE_OUTSIDE_MASK`).
 
 With `provider: "grok"`, edit requests are sent to xAI `/v1/images/edits`
 with the stored OAuth session. Masked Grok edits are rejected before

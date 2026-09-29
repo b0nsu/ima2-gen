@@ -145,7 +145,7 @@ describe("cli-output-recovery-contract: recover-output.ts exports", () => {
 
   it("edit writes requestId metadata and terminal filename", () => {
     assert.match(editRoute, /kind: "edit",\s*requestId,/s);
-    assert.match(editRoute, /finishMeta = \{ filename, imageChars: resultB64\.length \}/);
+    assert.match(editRoute, /finishMeta = \{ filename, imageChars: editB64\.length \}/);
   });
 
   it("multimode terminal metadata includes all saved filenames", () => {
