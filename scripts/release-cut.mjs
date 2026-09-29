@@ -200,7 +200,7 @@ function commit(bump) {
   git(["config", "user.name", "github-actions[bot]"]);
   git(["config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"]);
   git(["add", "package.json", "package-lock.json"]);
-  git(["commit", "-m", `[agent] chore: release v${version}`]);
+  git(["commit", "-m", releaseCommitSubject(version)]);
   emit({ version, sha: git(["rev-parse", "HEAD"]) });
 }
 
@@ -248,6 +248,129 @@ function remotesUnmoved(sha) {
   console.log(`[release] remotes still point at ${sha}`);
 }
 
+/**
+ * How the version commit reaches dev once main and the tag have landed. dev keeps
+ * receiving merges during a release, so a plain push of the SHA to dev is only
+ * possible while dev has not moved; otherwise the release is merged into dev.
+ */
+export function planDevLanding({ devContainsSha, shaContainsDev }) {
+  if (devContainsSha) return "noop";
+  if (shaContainsDev) return "fast-forward";
+  return "merge";
+}
+
+/** Subject of the version commit that `commit` creates; a resume finds an untagged cut by it. */
+export function releaseCommitSubject(version) {
+  return `[agent] chore: release v${version}`;
+}
+
+/**
+ * A resume may only finish a version whose tag (or version commit), package version and main
+ * agree. Without a tag, the resume is about to mint one, so it needs the same npm preview proof
+ * the cut requires before tagging.
+ *
+ * @param {{ version: string, sha: string, packageVersion: string | null, mainContainsSha: boolean,
+ *   tagged?: boolean, previewVersion?: string | null, previewGitHead?: string | null }} check
+ */
+export function assertResumable({
+  version, sha, packageVersion, mainContainsSha, tagged = true, previewVersion, previewGitHead,
+}) {
+  const problems = [];
+  if (!/^\d+\.\d+\.\d+$/.test(String(version))) problems.push(`resume version must be stable X.Y.Z (got ${version})`);
+  if (!FULL_OID.test(String(sha || ""))) {
+    problems.push(`tag v${version} does not exist on the remote and origin/main has no "${releaseCommitSubject(version)}" commit`);
+    return problems;
+  }
+  if (packageVersion !== version) problems.push(`package.json at v${version} is ${packageVersion ?? "(unreadable)"}`);
+  if (!mainContainsSha) problems.push(`origin/main does not contain v${version} (${sha})`);
+  if (!tagged) problems.push(...assertPreviewProof({ version, sha, previewVersion, previewGitHead }));
+  return problems;
+}
+
+const LAND_DEV_ATTEMPTS = 3;
+
+function pushDev(refspec) {
+  try {
+    execFileSync("git", ["push", "origin", refspec], { stdio: "inherit" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function mergeIntoDev(sha, version) {
+  git(["checkout", "-B", "release-dev-landing", "origin/dev"]);
+  try {
+    git(["merge", "--no-ff", "--no-edit", "-m", `[agent] chore: land release v${version} on dev`, sha]);
+  } catch (error) {
+    try {
+      execFileSync("git", ["merge", "--abort"], { stdio: "ignore" });
+    } catch {
+      // The merge never started (for example the SHA was missing); nothing to abort.
+    }
+    fail([`merging v${version} into dev conflicts (${error.message.split("\n")[0]}); merge ${sha} into dev by hand, then run: npm run release -- resume ${version}`]);
+  }
+  return pushDev("HEAD:refs/heads/dev");
+}
+
+function landDev(sha, version) {
+  if (!FULL_OID.test(String(sha || "")) || !version) throw new Error("usage: release-cut.mjs land-dev <sha> <version>");
+  git(["config", "user.name", "github-actions[bot]"]);
+  git(["config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"]);
+  for (let attempt = 1; attempt <= LAND_DEV_ATTEMPTS; attempt++) {
+    git(["fetch", "origin", "dev"]);
+    const dev = git(["rev-parse", "origin/dev"]);
+    const plan = planDevLanding({ devContainsSha: contains(sha, dev), shaContainsDev: contains(dev, sha) });
+    console.log(`[release] landing v${version} on dev (${dev}): ${plan}, attempt ${attempt}`);
+    if (plan === "noop") return;
+    const pushed = plan === "fast-forward" ? pushDev(`${sha}:refs/heads/dev`) : mergeIntoDev(sha, version);
+    if (pushed) return;
+  }
+  fail([`dev kept moving; could not land v${version} after ${LAND_DEV_ATTEMPTS} attempts. Run: npm run release -- resume ${version}`]);
+}
+
+function readPackageVersionAt(sha) {
+  try {
+    return JSON.parse(git(["show", `${sha}:package.json`])).version;
+  } catch {
+    return null;
+  }
+}
+
+/** The newest commit on `ref` whose subject is exactly the version commit's subject. */
+export function findReleaseCommit(version, ref = "origin/main", run = git) {
+  const subject = releaseCommitSubject(version);
+  const lines = run(["log", ref, "-n", "500", "--format=%H%x09%s"]).split("\n");
+  const hit = lines.map((line) => line.split("\t")).find(([, s]) => s === subject);
+  return hit ? hit[0] : "";
+}
+
+function resumeGuard(version) {
+  let sha = "";
+  try {
+    sha = execFileSync("git", ["rev-list", "-n1", `refs/tags/v${version}`], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch {
+    sha = "";
+  }
+  const tagged = Boolean(sha);
+  if (!tagged) sha = findReleaseCommit(version);
+  const problems = assertResumable({
+    version,
+    sha,
+    packageVersion: sha ? readPackageVersionAt(sha) : null,
+    mainContainsSha: sha ? contains(sha, git(["rev-parse", "origin/main"])) : false,
+    tagged,
+    previewVersion: tagged ? undefined : npmView(`${PACKAGE_NAME}@preview`, "version"),
+    previewGitHead: tagged ? undefined : npmView(`${PACKAGE_NAME}@preview`, "gitHead"),
+  });
+  if (problems.length) fail(problems);
+  console.log(`[release] resuming v${version} at ${sha}${tagged ? "" : " (untagged: the tag will be minted)"}`);
+  emit({ version, sha, mint_tag: String(!tagged) });
+}
+
 const COMMANDS = {
   preflight: () => preflight(),
   "assert-baseline": () => baseline(),
@@ -256,6 +379,8 @@ const COMMANDS = {
   "assert-clean": () => assertClean(),
   "assert-remotes-unmoved": (args) => remotesUnmoved(args[0]),
   "assert-preview-proof": (args) => previewProof(args[0], args[1]),
+  "land-dev": (args) => landDev(args[0], args[1]),
+  "resume-guard": (args) => resumeGuard(args[0]),
 };
 
 const isMain = process.argv[1] && process.argv[1].endsWith("release-cut.mjs");
@@ -263,7 +388,7 @@ if (isMain) {
   const [command, ...args] = process.argv.slice(2);
   try {
     const run = COMMANDS[command];
-    if (!run) throw new Error("usage: release-cut.mjs preflight | assert-baseline | commit <bump> | version-only <baseSha> <sha> | assert-clean | assert-remotes-unmoved <sha> | assert-preview-proof <version> <sha>");
+    if (!run) throw new Error("usage: release-cut.mjs preflight | assert-baseline | commit <bump> | version-only <baseSha> <sha> | assert-clean | assert-remotes-unmoved <sha> | assert-preview-proof <version> <sha> | land-dev <sha> <version> | resume-guard <version>");
     run(args);
   } catch (error) {
     console.error(`[release-cut] ${error.message}`);
