@@ -60,7 +60,12 @@ if (executionTestProcess(import.meta.url)) describe("execution edit real routes"
       assert.equal(inputs[1].image_url, `data:image/png;base64,${mask}`);
       assert.ok(content.some((item: { type: string; text?: string }) => item.type === "input_text" && item.text?.includes("mask guide")));
       assert.match(content.at(-1).text, /Change blue to amber/);
-      assert.equal(result.image, `data:image/png;base64,${output}`);
+      // The mask is 50% alpha everywhere, so the saved image blends source (#336699) and result (#cc6600).
+      const saved = await readFile(join(fixture.generatedDir, result.filename));
+      assert.equal(result.image, `data:image/png;base64,${saved.toString("base64")}`);
+      const blended = await sharp(saved).raw().toBuffer({ resolveWithObject: true });
+      assert.equal(blended.info.channels, 3);
+      for (const [index, expected] of [127, 102, 77].entries()) assert.ok(Math.abs(blended.data[index]! - expected) <= 2, `channel ${index}`);
       assert.equal(result.provider, "api");
       assert.equal(result.model, "gpt-5.4");
       assert.equal(result.revisedPrompt, "Amber edit fixture");
@@ -75,7 +80,7 @@ if (executionTestProcess(import.meta.url)) describe("execution edit real routes"
       assert.equal(sidecar.requestId, fixture.requestId);
       assert.deepEqual(sidecar.usage, { input_tokens: 11, output_tokens: 19, total_tokens: 30 });
       assert.equal("providerUrl" in sidecar, false);
-      assert.deepEqual(await readFile(join(fixture.generatedDir, result.filename)), Buffer.from(output, "base64"));
+      assert.equal(sidecar.maskOutsidePreserved, true);
       assert.equal((await readdir(fixture.generatedDir)).filter((name) => name.endsWith(".json")).length, 1);
       assert.equal(fixture.events.some((event) => event.event === "partial" || event.event === "done"), false);
     });
