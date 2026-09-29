@@ -11,7 +11,7 @@ process.env.IMA2_CONFIG_DIR = TEST_DIR;
 process.env.IMA2_DB_PATH = join(TEST_DIR, "sessions.db");
 
 const { config } = await import("../config.js");
-const { preserveOutsideMask } = await import("../lib/maskedEditComposite.ts");
+const { preserveOutsideMask, MASKED_EDIT_MAX_PIXELS } = await import("../lib/maskedEditComposite.ts");
 const { registerEditRoutes } = await import("../routes/edit.ts");
 const { _resetForTest: resetEventBus } = await import("../lib/eventBus.js");
 const { _resetForTests: resetInflight } = await import("../lib/inflight.js");
@@ -106,6 +106,39 @@ describe("preserveOutsideMask", () => {
     const [r, g, b, a] = pixel(got.data, W, 0, 0);
     assert.ok(Math.abs(r! - 128) <= 2 && g === 0 && Math.abs(b! - 127) <= 2 && a === 255, `blend ${r},${g},${b},${a}`);
     assert.deepEqual(pixel(got.data, W, W - 1, 0), [255, 0, 0, 255]);
+  });
+
+  it("keeps a transparent source pixel transparent in the kept area", async () => {
+    const raw = Buffer.alloc(W * H * 4, 255);
+    raw[(0 * W + (W - 1)) * 4 + 3] = 0;
+    const source = await sharp(raw, { raw: { width: W, height: H, channels: 4 } }).png().toBuffer();
+    const result = await sharp({ create: { width: W, height: H, channels: 3, background: "#0000ff" } }).png().toBuffer();
+    const out = await preserveOutsideMask({ source, result, mask: await leftHalfEditableMask() });
+    const got = await rgba(out);
+    assert.equal(pixel(got.data, W, W - 1, 0)[3], 0, "kept transparent pixel");
+    assert.deepEqual(pixel(got.data, W, 0, 0), [0, 0, 255, 255], "edited pixel comes from the result");
+    assert.equal((await sharp(out).metadata()).channels, 4);
+  });
+
+  it("refuses a source above the composite pixel limit", async () => {
+    assert.equal(MASKED_EDIT_MAX_PIXELS, 4096 * 4096);
+    const source = await sharp({ create: { width: 4097, height: 4096, channels: 3, background: "#000" } }).png().toBuffer();
+    const result = await noisyPng(W, H, 13);
+    await assert.rejects(
+      preserveOutsideMask({ source, result, mask: await leftHalfEditableMask() }),
+      /pixel limit/,
+    );
+  });
+
+  it("runs composites one at a time without dropping one after a failure", async () => {
+    const mask = await leftHalfEditableMask();
+    const jobs = [
+      preserveOutsideMask({ source: await noisyPng(W, H, 14), result: await noisyPng(W, H, 15), mask }),
+      preserveOutsideMask({ source: await noisyPng(W, H, 16), result: await noisyPng(W, H, 17), mask: mask.subarray(0, 33) }),
+      preserveOutsideMask({ source: await noisyPng(W, H, 18), result: await noisyPng(W, H, 19), mask }),
+    ];
+    const settled = await Promise.allSettled(jobs);
+    assert.deepEqual(settled.map((s) => s.status), ["fulfilled", "rejected", "fulfilled"]);
   });
 });
 

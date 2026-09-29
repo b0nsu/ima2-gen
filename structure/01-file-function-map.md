@@ -305,7 +305,7 @@ scope/revision/identity reconciliation shared by polling and reload actions.
 | `lib/grokVideoPlannerPrompt.ts` | 225 | Grok video planner prompt construction |
 | `lib/historyIndex.ts` | 57 | Generated-history index construction and lookup |
 | `lib/imageThumb.ts` | 50 | Image thumbnail generation helpers |
-| `lib/maskedEditComposite.ts` | 68 | Masked-edit pixel lock: restores source pixels wherever the edit mask is opaque (`features.preserveOutsideMask`) |
+| `lib/maskedEditComposite.ts` | 98 | Masked-edit pixel lock: restores source pixels wherever the edit mask is opaque (`features.preserveOutsideMask`); RGBA blend, 4096² cap, one composite at a time |
 | `lib/multimodeHelpers.ts` | 48 | Shared multimode generation helpers |
 | `lib/nodeHelpers.ts` | 134 | Node workflow graph and payload helpers |
 | `lib/vectorizeImage.ts` | 179 | Raster-to-SVG tracing (VTracer) with named presets, size/dimension guards, and SVG optimization |
