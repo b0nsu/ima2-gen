@@ -190,3 +190,28 @@ failing check; desktop ctx returns enabled:false and notice null without calling
 - Residual (recorded, accepted): on filesystems without hard links (some network mounts) the restore
   step falls back to leaving the fresh owner's lock renamed; its owner then finds its token missing
   on release and logs it. The worst outcome is one duplicate "updated" toast, never a lost install.
+
+## Amendments after audit round 3 (supersede R1, A5 and A5b: no lock at all)
+
+- A5c (lock-free state split): the cache becomes three owners under `<configDir>/`, each with
+  last-writer-wins semantics where that is harmless and exclusive creation where "once" matters.
+  1. `version.json` = {latest_version, last_checked_at, tag}. Written only by checks, whole-file
+     atomic rename (pid+random temp, 0o600). Two concurrent checks both write fresh registry facts,
+     so whichever rename lands last is still correct.
+  2. `update-dismissed.json` = {dismissed_version}. Written only by an explicit dismiss, atomic
+     rename. Two dismisses race only between user choices; last one wins.
+  3. `update-seen/` directory of empty marker files named by version (`3.26.0`). The claim is
+     `openSync(join(dir, version), "wx")`: exactly one process creates a given marker, EEXIST means
+     someone else already claimed it. No marker is ever reclaimed or renamed.
+  claimUpdatedNotice(current): list markers (valid versions only) BEFORE creating ours; create the
+  marker for current with "wx"; on EEXIST return null. On success return current only when some
+  earlier marker exists and is lower than current; first run (no markers) and downgrades return null.
+  After a success, best-effort delete all but the newest 5 markers. `ima2 update` creates the marker
+  for the version it just installed (markSeen) so nothing repeats.
+  readVersionCache() keeps its VersionCache shape as a merged read view: the version.json fields,
+  dismissed_version from update-dismissed.json, and last_seen_version = highest marker (or null).
+  updateVersionCache(patch) routes fields to their owner (check fields -> version.json, dismissed_version
+  -> update-dismissed.json, last_seen_version -> markSeen). Corrupt or missing files read as null.
+  Tests: the 4-process claim test (exactly one prints the version), first-run null, upgrade once,
+  downgrade null, concurrent check writes leave a valid version.json, a dismiss survives a concurrent
+  check write (different files).

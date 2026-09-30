@@ -27,7 +27,7 @@ popup and the served UI, and says "ima2 updated to vX" once after an update.
 | ID | Decision |
 |---|---|
 | D1 | Flat owners: lib/updateVersion.ts (semver + channel), lib/updateCache.ts (version.json), lib/updateCheck.ts (registry + scheduler), routes/update.ts, bin/lib/npmUpdate.ts, bin/commands/update.ts. |
-| D2 | Cache `<configDir>/version.json` = {latest_version, last_checked_at (ms), dismissed_version, tag, last_seen_version}. Writes take a short mkdir lock, re-read, merge their own fields, write a pid+random temp file and rename it (010 R1). |
+| D2 | Update state lives in three single-writer owners under the config dir: version.json (check results), update-dismissed.json (dismissal), update-seen/<version> markers claimed with exclusive create. No lock (010 A5c). |
 | D3 | Server scheduler starts after listen, checks at once when the cache is older than 20 h or on another tag, then ticks hourly; failures back off from 1 min doubling to 1 h. Off when IMA2_DISABLE_UPDATE_CHECK=1 or the launcher is desktop. Timer unref'd and cleared on shutdown. |
 | D4 | GET /api/update/badge (cache only), POST /api/update/check, POST /api/update/dismiss {version}, POST /api/update/notice. No HTTP install endpoint. |
 | D5 | `ima2 update [--check] [--tag latest|preview] [--yes] [--json]`. Refuses source checkouts and non-global installs. Runs npm install -g ima2-gen@<version> (argv, no shell), verifies the installed package.json, then restarts the service (new CLI `service restart`) or background runtime (new CLI `restart`); a foreground server gets a restart hint. Prints "Updated to vX". |
