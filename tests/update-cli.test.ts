@@ -2,7 +2,7 @@ import { after, mock, test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readdirSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Exec, FsLike, RuntimeSnapshot } from "../bin/lib/npmUpdate.js";
 import type { UpdateDeps } from "../bin/commands/update.js";
@@ -170,12 +170,12 @@ test("missing/unreadable/malformed service artifacts never consult service-state
 });
 test("an unreadable config declaration fails ownership closed instead of defaulting to ~/.ima2", () => {
   const f = artifactFixture("linux");
-  const home = process.env.HOME ?? "/home";
+  const defaultDir = join(homedir(), ".ima2");
   const quoted = ["[Service]", "ExecStart=/node /pkg/server.js", 'Environment="IMA2_CONFIG_DIR=/other-config"'].join("\n");
   f.fs.readFile = () => quoted;
-  assert.equal(serviceOwned("/pkg", home + "/.ima2", f.opts), false);
+  assert.equal(serviceOwned("/pkg", defaultDir, f.opts), false);
   f.fs.readFile = () => ["[Service]", "ExecStart=/node /pkg/server.js"].join("\n");
-  assert.equal(serviceOwned("/pkg", home + "/.ima2", f.opts), true);
+  assert.equal(serviceOwned("/pkg", defaultDir, f.opts), true);
 });
 const notice = () => ({ command: "status", args: [], isTTY: true, env: {}, current: "1.0.0", cache: cache() });
 test("cached notices include preview command and suppress every ineligible context", () => {
