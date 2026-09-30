@@ -7,7 +7,8 @@ import { describe, it, type TestContext } from "node:test";
 import { markSeen, updateVersionCache, versionCachePath, type UpdateBadge } from "../lib/updateCache.js";
 import type { CheckDeps } from "../lib/updateCheck.js";
 import type { RouteRuntimeContext } from "../lib/runtimeContext.js";
-import { registerUpdateRoutes, type UpdateRouteDeps } from "../routes/update.js";
+import { registerUpdateRoutes, updateHintFrame, type UpdateRouteDeps } from "../routes/update.js";
+import { registerEventsRoute } from "../routes/events.js";
 
 async function fixture(t: TestContext, ctx: RouteRuntimeContext = {}, deps: UpdateRouteDeps = {}) {
   const dir = mkdtempSync(join(tmpdir(), "ima2-update-routes-"));
@@ -129,5 +130,41 @@ describe("update routes on an ephemeral local server", () => {
     markSeen("3.25.0", installed.path);
     markSeen("3.26.0", installed.path);
     assert.deepEqual(await (await installed.post("notice")).json(), { updatedTo: null });
+  });
+});
+
+describe("update hint on the event stream", () => {
+  it("builds one id-less update frame for npm servers and none for desktop or bare contexts", (t) => {
+    const dir = mkdtempSync(join(tmpdir(), "ima2-update-hint-"));
+    t.after(() => rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
+    const cachePath = versionCachePath(dir);
+    updateVersionCache({ latest_version: "3.26.0", last_checked_at: 999, tag: "latest" }, cachePath);
+    const frame = updateHintFrame({ packageVersion: "3.25.0", launcher: "foreground" }, { cachePath, now: () => 1000, env: {} });
+    assert.ok(frame);
+    assert.match(frame, /^event: update\ndata: \{.*\}\n\n$/s);
+    assert.doesNotMatch(frame, /^id:/m);
+    const badge = JSON.parse(frame.split("\n")[1]!.slice("data: ".length)) as UpdateBadge;
+    assert.equal(badge.available, true);
+    assert.equal(badge.latestVersion, "3.26.0");
+    assert.equal(updateHintFrame({ packageVersion: "3.25.0", launcher: "desktop" }, { cachePath }), null);
+    assert.equal(updateHintFrame({} as RouteRuntimeContext, { cachePath }), null);
+  });
+
+  it("writes the hint before job events when a browser opens /api/events", async (t) => {
+    const dir = mkdtempSync(join(tmpdir(), "ima2-update-hint-sse-"));
+    t.after(() => rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
+    const app = express();
+    registerEventsRoute(app, { packageVersion: "3.25.0", launcher: "foreground", config: { storage: { configDir: dir } } } as RouteRuntimeContext);
+    const server = app.listen(0, "127.0.0.1");
+    await new Promise<void>((resolve) => server.once("listening", resolve));
+    t.after(() => { server.closeAllConnections(); server.close(); });
+    const address = server.address();
+    assert.ok(address && typeof address === "object");
+    const controller = new AbortController();
+    const response = await fetch(`http://127.0.0.1:${address.port}/api/events`, { signal: controller.signal });
+    const reader = response.body!.getReader();
+    const first = new TextDecoder().decode((await reader.read()).value);
+    controller.abort();
+    assert.match(first, /^event: update\ndata: \{/);
   });
 });

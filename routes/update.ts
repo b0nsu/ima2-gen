@@ -12,6 +12,29 @@ export interface UpdateRouteDeps {
   env?: NodeJS.ProcessEnv;
 }
 
+/**
+ * One SSE frame with the cached badge, written when a browser opens GET /api/events. It is the
+ * web UI's only cue that this server has update routes: the UI makes no update request until it
+ * sees it, so fixture servers and e2e route harnesses never receive one. No id line, so replay
+ * cursors are unchanged. Null for desktop-launched servers and for contexts without a version.
+ */
+export function updateHintFrame(ctxRaw: RouteRuntimeContext, deps: UpdateRouteDeps = {}): string | null {
+  const raw = ctxRaw as { packageVersion?: unknown; launcher?: unknown } | undefined;
+  if (typeof raw?.packageVersion !== "string" || raw.launcher === "desktop") return null;
+  try {
+    const ctx = requireRuntimeContext(ctxRaw);
+    const badge = buildBadge({
+      cache: readVersionCache(deps.cachePath ?? versionCachePath(ctx.config.storage.configDir)),
+      current: ctx.packageVersion, tag: defaultTag(ctx.packageVersion), surface: "npm",
+      enabled: updateChecksEnabled(deps.env ?? process.env, ctx.launcher),
+      now: (deps.now ?? Date.now)(), staleMs: ctx.config.update.staleMs,
+    });
+    return `event: update\ndata: ${JSON.stringify(badge)}\n\n`;
+  } catch {
+    return null; // The hint is optional; an unreadable cache must not break the event stream.
+  }
+}
+
 export function registerUpdateRoutes(app: Express, ctxRaw: RouteRuntimeContext, deps: UpdateRouteDeps = {}): void {
   const ctx = requireRuntimeContext(ctxRaw);
   const surface = ctx.launcher === "desktop" ? "desktop" : "npm";

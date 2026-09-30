@@ -26,6 +26,7 @@ const RECONNECT_MAX_MS = 30_000;
 let source: EventSource | null = null;
 let lastEventId = "";
 const subs: Set<Subscription> = new Set();
+const updateHintListeners = new Set<(badge: unknown) => void>();
 let resyncCallback: (() => void) | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let wasEverConnected = false;
@@ -94,6 +95,15 @@ function connect() {
     });
   }
 
+  ownedSource.addEventListener("update", (ev: Event) => {
+    if (source !== ownedSource || typeof (ev as MessageEvent).data !== "string") return;
+    let badge: unknown;
+    try { badge = JSON.parse((ev as MessageEvent).data); }
+    catch { return; }
+    if (badge === null || typeof badge !== "object" || Array.isArray(badge)) return;
+    for (const listener of updateHintListeners) listener(badge);
+  });
+
   ownedSource.addEventListener("replay-gap", () => {
     if (source !== ownedSource) return;
     lastEventId = "";
@@ -151,6 +161,11 @@ export function subscribe(
   subs.add(sub);
   if (!source || source.readyState === EventSource.CLOSED) connect();
   return () => { subs.delete(sub); };
+}
+
+export function onUpdateHint(listener: (badge: unknown) => void): () => void {
+  updateHintListeners.add(listener);
+  return () => { updateHintListeners.delete(listener); };
 }
 
 export function armStreamTimeout(onTimeout: () => void, ms = JOB_STREAM_TIMEOUT_MS): () => void {

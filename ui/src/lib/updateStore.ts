@@ -1,7 +1,8 @@
 import { desktopBridge } from "./desktopShell";
+import { onUpdateHint } from "./eventChannel";
 import {
-  BADGE_POLL_MS, UPDATE_FIRST_FETCH_MS, claimServerNotice, dismissUpdate, fetchUpdateBadge, viewFromBadge, viewFromDesktop,
-  type UpdateView,
+  BADGE_POLL_MS, claimServerNotice, dismissUpdate, fetchUpdateBadge, viewFromBadge, viewFromDesktop,
+  type UpdateBadge, type UpdateView,
 } from "./updateStatus";
 
 const hidden: UpdateView = { kind: "hidden" };
@@ -33,6 +34,26 @@ function startDesktop(): () => void {
   return () => { alive = false; unsubscribe?.(); };
 }
 
+function badgeFromHint(value: unknown): UpdateBadge | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const badge = value as Record<string, unknown>;
+  if (badge.surface !== "npm" || typeof badge.enabled !== "boolean" || typeof badge.available !== "boolean"
+    || typeof badge.currentVersion !== "string" || typeof badge.command !== "string"
+    || (badge.latestVersion !== null && typeof badge.latestVersion !== "string")
+    || (badge.releaseUrl !== null && typeof badge.releaseUrl !== "string")
+    || (badge.noticePending !== undefined && typeof badge.noticePending !== "boolean")) return null;
+  return value as UpdateBadge;
+}
+
+function acceptBadge(badge: UpdateBadge): void {
+  publish(viewFromBadge(badge));
+  if (badge.noticePending === true) {
+    noticePending = true;
+    releaseNoticeWait?.();
+    releaseNoticeWait = null;
+  }
+}
+
 function startBrowser(): () => void {
   let alive = true;
   let fetching = false;
@@ -41,25 +62,21 @@ function startBrowser(): () => void {
     fetching = true;
     try {
       const badge = await fetchUpdateBadge();
-      if (alive) {
-        publish(viewFromBadge(badge));
-        if (badge.noticePending === true) {
-          noticePending = true;
-          releaseNoticeWait?.();
-          releaseNoticeWait = null;
-        }
-      }
+      if (alive) acceptBadge(badge);
     } catch { /* Offline and LAN authentication failures keep the last view. */ }
     finally { fetching = false; }
   };
   let interval: ReturnType<typeof setInterval> | null = null;
-  const timeout = setTimeout(() => {
-    void poll();
-    interval = setInterval(() => { void poll(); }, BADGE_POLL_MS);
-  }, UPDATE_FIRST_FETCH_MS);
+  const unsubscribeHint = onUpdateHint((value) => {
+    if (!alive) return;
+    const badge = badgeFromHint(value);
+    if (!badge) return;
+    if (interval === null) interval = setInterval(() => { void poll(); }, BADGE_POLL_MS);
+    acceptBadge(badge);
+  });
   return () => {
     alive = false;
-    clearTimeout(timeout);
+    unsubscribeHint();
     if (interval !== null) clearInterval(interval);
   };
 }

@@ -32,8 +32,6 @@ export type UpdateView =
   | { kind: "npm"; version: string; command: string; releaseUrl: string | null }
   | { kind: "desktop"; version: string; phase: "available" | "downloading" | "downloaded" | "error"; progress: number | null };
 
-// Let the page settle beyond Playwright's 60 s test timeout; opencodex desktop waits 30 s before its first check.
-export const UPDATE_FIRST_FETCH_MS = 90_000;
 export const BADGE_POLL_MS = 10 * 60_000;
 
 export function viewFromBadge(badge: UpdateBadge | null): UpdateView {
