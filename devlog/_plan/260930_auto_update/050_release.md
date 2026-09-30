@@ -1,5 +1,15 @@
 # 050 release 3.26.0 (wp3)
 
+
+## Amendments at wp3 P (stale check against origin/dev 9237c870, unchanged)
+
+- The CHANGELOG cut rides this PR: `## [Unreleased]` keeps an empty heading and the two entries
+  move under `## [3.26.0] - 2026-09-30` (the release script does not edit CHANGELOG.md; #352 cut
+  3.25.0 by hand). A `minor` bump is right: both entries are `### Added`.
+- Screenshots for the PR body: /tmp/ima2-au/shot-{badge,popover,mobile}.png, committed to the orphan
+  `pr-assets` branch under `260930-auto-update/` and linked by commit SHA (AGENTS.md "Pull requests").
+- Merge uses the repository's merge commit (as #353), then the post-merge CI on dev is watched before
+  `npm run release -- minor --promote --approve --yes`.
 ## Steps
 
 1. Push `codex/260930-auto-update`, open a PR to `dev` with the summary, test evidence and the UI
@@ -21,4 +31,3 @@
 The user asked to "patch and deploy" in this session: push, PR, merge to dev, the release command
 and its approvals are in scope. Signing or notarization failures that need a human secret are
 NEEDS_HUMAN, not something to bypass.
-
