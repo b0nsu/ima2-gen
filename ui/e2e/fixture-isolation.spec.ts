@@ -33,6 +33,7 @@ test("I1 child environment never inherits credentials, loaders or provider defau
     for (const name of ["HOME", "CODEX_HOME", "NODE_OPTIONS", "HTTPS_PROXY", "OPENAI_API_KEY", "MINIMAX_API_KEY"]) expect(env[name]).toBeUndefined();
     expect(env.IMA2_OAUTH_PROXY_PORT).toBe("41234");
     expect(env.IMA2_MCP_PROVIDERS).toBe(","); expect(env.IMA2_HOST).toBe("127.0.0.1");
+    expect(env.IMA2_DISABLE_UPDATE_CHECK).toBe("1");
   }
   for (const url of ["https://127.0.0.1:41234", "http://localhost:41234", "http://127.0.0.1:3333", "http://u:p@127.0.0.1:41234"]) {
     expect(() => makeAppEnv({}, { home: "/synthetic/home", stubUrl: url, mode: "minimax", withoutMinimaxKey: true })).toThrow();
