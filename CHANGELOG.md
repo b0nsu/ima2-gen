@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Desktop update checks find their manifests** — installed apps ask the release GitHub marks Latest, which is the npm release `vX.Y.Z`, for `latest-mac.yml`, but the manifests lived only in `desktop-vX.Y.Z`, so every check ended in a 404 ("Unable to check for updates"). The desktop workflow now copies `latest*.yml` into `vX.Y.Z` with file paths that point at the desktop release assets (`scripts/mirror-desktop-update-manifests.mjs`), which also lets apps from 3.23–3.26 update without a new build.
+
 ## [3.26.0] - 2026-09-30
 
 ### Added
