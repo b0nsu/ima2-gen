@@ -44,6 +44,13 @@ function fixture(overrides: Partial<UpdateDeps> = {}) {
     now: () => elapsed, ...overrides,
     sleep: async (ms) => { elapsed += ms; await overrides.sleep?.(ms); },
   };
+  // With an owned service, the live server in these fixtures is that service (launcher
+  // "service"), since a service restart is only planned over its own server (review F1).
+  const snapshot = deps.runtime;
+  deps.runtime = async () => {
+    const current = await snapshot();
+    return deps.serviceOwned(deps.pkgDir) && current.launcher === "background" ? { ...current, launcher: "service", managed: true } : current;
+  };
   return { deps, lines, errors, calls, order };
 }
 
@@ -106,9 +113,16 @@ test("manifest verification handles invalid/missing metadata and new CLI executi
 });
 test("restart plans prioritize owned service and preserve foreground/desktop/non-live runtimes", () => {
   assert.deepEqual(planRestart({ ...runtime({ live: false }), serviceOwned: true }), { kind: "service" });
+  assert.deepEqual(planRestart({ ...runtime({ launcher: "service", managed: true }), serviceOwned: true }), { kind: "service" });
+  // An owned but stopped service must not restart over a live server that someone else runs:
+  // service restart stops whatever answers first (review F1).
+  assert.deepEqual(planRestart({ ...runtime({ launcher: "desktop" }), serviceOwned: true }), { kind: "desktop" });
+  assert.deepEqual(planRestart({ ...runtime({ launcher: "foreground" }), serviceOwned: true }), { kind: "foreground", url: "http://localhost:3333" });
+  assert.deepEqual(planRestart({ ...runtime(), serviceOwned: true }), { kind: "background" });
   assert.deepEqual(planRestart({ ...runtime(), serviceOwned: false }), { kind: "background" });
   assert.deepEqual(planRestart({ ...runtime({ launcher: "foreground" }), serviceOwned: false }), { kind: "foreground", url: "http://localhost:3333" });
-  for (const patch of [{ live: false }, { managed: true }, { launcher: "desktop" }, { launcher: null }, { launcher: "foreground", url: null }]) {
+  assert.deepEqual(planRestart({ ...runtime({ launcher: "desktop" }), serviceOwned: false }), { kind: "desktop" });
+  for (const patch of [{ live: false }, { managed: true }, { launcher: null }, { launcher: "foreground", url: null }]) {
     assert.deepEqual(planRestart({ ...runtime(patch), serviceOwned: false }), { kind: "none" });
   }
 });
@@ -153,6 +167,15 @@ test("missing/unreadable/malformed service artifacts never consult service-state
     assert.equal(serviceOwned("/pkg", "/cfg", f.opts), false);
   }
   assert.equal(serviceOwned("/pkg", "/cfg", { platform: "win32", fs: fakeFs }), false);
+});
+test("an unreadable config declaration fails ownership closed instead of defaulting to ~/.ima2", () => {
+  const f = artifactFixture("linux");
+  const home = process.env.HOME ?? "/home";
+  const quoted = ["[Service]", "ExecStart=/node /pkg/server.js", 'Environment="IMA2_CONFIG_DIR=/other-config"'].join("\n");
+  f.fs.readFile = () => quoted;
+  assert.equal(serviceOwned("/pkg", home + "/.ima2", f.opts), false);
+  f.fs.readFile = () => ["[Service]", "ExecStart=/node /pkg/server.js"].join("\n");
+  assert.equal(serviceOwned("/pkg", home + "/.ima2", f.opts), true);
 });
 const notice = () => ({ command: "status", args: [], isTTY: true, env: {}, current: "1.0.0", cache: cache() });
 test("cached notices include preview command and suppress every ineligible context", () => {

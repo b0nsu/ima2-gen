@@ -73,6 +73,10 @@ async function proveRestart(ctx: Context): Promise<RuntimeSnapshot> {
 async function restartUpdated(ctx: Context, plan: RestartPlan, exec: Exec): Promise<void> {
   if (plan.kind === "none") return;
   ctx.result.restart = { kind: plan.kind, ok: false, version: null };
+  if (plan.kind === "desktop") {
+    ctx.say("The running server belongs to the ima2 desktop app, which updates itself; it was left running.");
+    return;
+  }
   if (plan.kind === "foreground") {
     ctx.say(`Restart your running 'ima2 serve' (${plan.url}) to use v${ctx.result.latest}.`);
     return;

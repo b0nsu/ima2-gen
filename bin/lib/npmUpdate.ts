@@ -87,9 +87,17 @@ export async function runtimeSnapshot(): Promise<RuntimeSnapshot> {
   return { live: report.liveness === "live", launcher: report.runtime?.launcher ?? null,
     url: report.runtime?.url ?? null, version: report.runtime?.version ?? null, managed: report.serviceOwnership === "managed" };
 }
-export type RestartPlan = { kind: "service" } | { kind: "background" } | { kind: "foreground"; url: string } | { kind: "none" };
+export type RestartPlan =
+  | { kind: "service" } | { kind: "background" } | { kind: "foreground"; url: string }
+  | { kind: "desktop" } | { kind: "none" };
+/**
+ * A service restart stops whatever server answers first, so it is chosen only when no live
+ * server exists or the live one is that service. A live desktop, terminal or background
+ * server keeps running and gets its own plan.
+ */
 export function planRestart(input: RuntimeSnapshot & { serviceOwned: boolean }): RestartPlan {
-  if (input.serviceOwned) return { kind: "service" };
+  if (input.live && input.launcher === "desktop") return { kind: "desktop" };
+  if (input.serviceOwned && (!input.live || input.managed || input.launcher === "service")) return { kind: "service" };
   if (!input.live || input.managed) return { kind: "none" };
   if (input.launcher === "background") return { kind: "background" };
   if (input.launcher === "foreground" && input.url) return { kind: "foreground", url: input.url };
@@ -111,6 +119,17 @@ function serviceServerPath(text: string, platform: NodeJS.Platform): string | nu
   const args = command?.match(/"[^"]*"|'[^']*'|\S+/g);
   return args?.length === 2 ? args[1]!.replace(/^(["'])(.*)\1$/, "$2") : null;
 }
+/**
+ * The config dir the artifact declares, or null when a declaration exists that the simple
+ * parser cannot read (quoted systemd assignments, escapes): ownership must then fail closed
+ * instead of falling back to the default ~/.ima2.
+ */
+function declaredConfigDir(text: string): string | null {
+  const mentions = text.split("\n").filter((line) => line.includes("IMA2_CONFIG_DIR")).length;
+  const plain = /<key>IMA2_CONFIG_DIR<\/key>/.test(text) || /^Environment=IMA2_CONFIG_DIR=[^"'\\\s]*$/m.test(text);
+  if (mentions > 0 && (!plain || mentions > 1)) return null;
+  return parseServiceConfigDir(text);
+}
 function canonicalConfig(path: string, fs: FsLike): string {
   try { return fs.realpath(path); } catch { return resolve(path); }
 }
@@ -127,8 +146,9 @@ export function serviceOwned(
     const server = serviceServerPath(text, platform);
     if (server && isAbsolute(server) && basename(server) === "server.js") {
       const inside = relative(fs.realpath(pkgDir), fs.realpath(server));
+      const declared = declaredConfigDir(text);
       if (inside && inside !== ".." && !inside.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) && !isAbsolute(inside)
-        && canonicalConfig(parseServiceConfigDir(text), fs) === canonicalConfig(configDir, fs)) return true;
+        && declared !== null && canonicalConfig(declared, fs) === canonicalConfig(configDir, fs)) return true;
     }
   } catch { /* An unreadable/unparseable artifact cannot prove ownership. */ }
   (opts.log ?? console.error)("A login service exists but belongs to another install; not restarting it.");
