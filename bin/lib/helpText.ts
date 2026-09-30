@@ -20,6 +20,7 @@ export function renderHelp(pkg: { name: string; version: string }): string {
     doctor         Diagnose environment and setup
     open           Open web UI in browser
     reset          Reset configuration
+    update         Update ima2 to the latest npm release (--check, --tag preview)
 
   Client commands (require a running 'ima2 serve'):
     gen <prompt>   Generate image(s) from prompt  (ima2 gen --help)

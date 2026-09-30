@@ -1,13 +1,7 @@
+import { initialUpdateState, reduceUpdateState } from "./update-state.mjs";
+
 const UPDATE_DOWNLOAD_BUTTON = 0;
 const UPDATE_INSTALL_BUTTON = 0;
-
-function inactiveController() {
-  return {
-    active: false,
-    checkForUpdates: async () => false,
-    setAutoDownload: () => {},
-  };
-}
 
 function errorMessage(error) {
   return error instanceof Error ? error.message : String(error);
@@ -55,79 +49,159 @@ function updaterSupported({ platform, arch, env }) {
   return false;
 }
 
-export async function createUpdaterController(options) {
-  const {
-    app,
-    dialog,
-    prepareForInstall,
-    platform = process.platform,
-    arch = process.arch,
-    env = process.env,
-    logger = console,
-    loadUpdater = () => import("electron-updater"),
-    autoDownload = true,
-    onUpdateReady = () => {},
-  } = options;
-  if (!app.isPackaged || !updaterSupported({ platform, arch, env })) return inactiveController();
-
-  let autoUpdater;
-  try {
-    autoUpdater = resolveAutoUpdater(await loadUpdater());
-    if (!autoUpdater) throw new Error("electron-updater did not export autoUpdater");
-  } catch (error) {
-    logger.error(`[desktop:update] updater unavailable: ${errorMessage(error)}`);
-    return inactiveController();
+class UpdateController {
+  constructor({ app, dialog, prepareForInstall, logger, now }, autoUpdater) {
+    this.active = Boolean(autoUpdater);
+    this.state = initialUpdateState({ active: this.active, currentVersion: app.getVersion() });
+    this.dialog = dialog;
+    this.prepareForInstall = prepareForInstall;
+    this.logger = logger;
+    this.now = now;
+    this.autoUpdater = autoUpdater;
+    this.listeners = new Set();
+    this.handlers = new Map();
+    this.checking = false;
+    this.downloading = null;
+    this.installing = false;
+    this.disposed = false;
+    if (autoUpdater) this.listen();
   }
 
-  // Auto-update mode downloads in the background; manual checks still prompt first.
-  autoUpdater.autoDownload = autoDownload;
-  autoUpdater.autoInstallOnAppQuit = false;
-  autoUpdater.on("error", (error) => {
-    logger.error(`[desktop:update] ${errorMessage(error)}`);
-  });
+  snapshot() { return { ...this.state }; }
 
-  let checking = false;
-  const checkForUpdates = async ({ manual = false } = {}) => {
-    if (checking) return false;
-    checking = true;
+  onState(fn) {
+    this.listeners.add(fn);
+    return () => this.listeners.delete(fn);
+  }
+
+  dispatch(event) {
+    if (this.disposed) return;
+    const next = reduceUpdateState(this.state, event);
+    if (next === this.state) return;
+    this.state = next;
+    for (const fn of this.listeners) fn(this.snapshot());
+  }
+
+  fail(error, operation) {
+    const message = errorMessage(error);
+    this.logger.error(`[desktop:update] ${operation}: ${message}`);
+    this.dispatch({ type: "error", message });
+    return false;
+  }
+
+  listen() {
+    const handlers = {
+      "checking-for-update": () => this.dispatch({ type: "checking" }),
+      "update-available": (info) => this.dispatch({ type: "available", version: info.version }),
+      "update-not-available": () => this.dispatch({ type: "not-available", at: this.now() }),
+      "download-progress": (p) => this.dispatch({ type: "progress", percent: p.percent }),
+      "update-downloaded": (info) => {
+        this.dispatch({ type: "downloaded", version: info.version });
+        void this.installUpdate({ confirm: true });
+      },
+      error: (error) => this.fail(error, "updater error"),
+    };
+    for (const [name, fn] of Object.entries(handlers)) {
+      this.handlers.set(name, fn);
+      this.autoUpdater.on(name, fn);
+    }
+  }
+
+  async checkForUpdates({ manual = false } = {}) {
+    if (!this.active || this.disposed || this.checking || ["downloading", "downloaded", "installing"].includes(this.state.phase)) return false;
+    this.checking = true;
     try {
-      const result = await autoUpdater.checkForUpdates();
-      if (!result) return false;
+      const result = await this.autoUpdater.checkForUpdates();
+      if (!result || this.disposed) return false;
+      if (result.downloadPromise) void result.downloadPromise.catch((error) => this.fail(error, "download failed"));
       if (!result.isUpdateAvailable) {
-        if (manual) await dialog.showMessageBox({ type: "info", title: "ima2 Update", message: "ima2 is up to date." });
-        return true;
-      }
-      // With autoDownload on, electron-updater is already downloading; no prompt needed.
-      if (!autoUpdater.autoDownload) {
-        const prompt = await dialog.showMessageBox(updateAvailableDialog(result.updateInfo.version));
-        if (prompt.response === UPDATE_DOWNLOAD_BUTTON) await autoUpdater.downloadUpdate();
+        if (manual) await this.dialog.showMessageBox({ type: "info", title: "ima2 Update", message: "ima2 is up to date." });
+      } else if (manual && !this.autoUpdater.autoDownload) {
+        const prompt = await this.dialog.showMessageBox(updateAvailableDialog(result.updateInfo.version));
+        if (prompt.response === UPDATE_DOWNLOAD_BUTTON) await this.downloadUpdate();
       }
       return true;
     } catch (error) {
-      logger.error(`[desktop:update] check failed: ${errorMessage(error)}`);
-      if (manual) {
-        await dialog.showMessageBox({ type: "error", title: "ima2 Update", message: "Unable to check for updates.", detail: errorMessage(error) });
-      }
+      this.fail(error, "check failed");
+      if (manual) await this.dialog.showMessageBox({ type: "error", title: "ima2 Update", message: "Unable to check for updates.", detail: errorMessage(error) });
       return false;
     } finally {
-      checking = false;
+      this.checking = false;
     }
-  };
+  }
 
-  autoUpdater.on("update-downloaded", (info) => {
-    onUpdateReady(info);
-    void (async () => {
-      const prompt = await dialog.showMessageBox(updateDownloadedDialog(info.version));
-      if (prompt.response !== UPDATE_INSTALL_BUTTON) return;
-      if (await prepareForInstall()) autoUpdater.quitAndInstall();
-    })().catch((error) => {
-      logger.error(`[desktop:update] install preparation failed: ${errorMessage(error)}`);
-    });
-  });
+  downloadUpdate() {
+    if (this.downloading) return this.downloading;
+    if (!this.active || this.disposed || !(this.state.phase === "available" || (this.state.phase === "error" && this.state.availableVersion))) return Promise.resolve(false);
+    this.dispatch({ type: "progress", percent: 0 });
+    this.downloading = Promise.resolve().then(() => this.autoUpdater.downloadUpdate())
+      .then(() => true).catch((error) => this.fail(error, "download failed"))
+      .finally(() => { this.downloading = null; });
+    return this.downloading;
+  }
 
-  return {
-    active: true,
-    checkForUpdates,
-    setAutoDownload: (enabled) => { autoUpdater.autoDownload = enabled === true; },
-  };
+  async installUpdate({ confirm = false } = {}) {
+    if (!this.active || this.disposed || this.installing || this.state.phase !== "downloaded") return false;
+    this.installing = true;
+    const version = this.state.availableVersion;
+    try {
+      if (confirm) {
+        const prompt = await this.dialog.showMessageBox(updateDownloadedDialog(version));
+        if (prompt.response !== UPDATE_INSTALL_BUTTON) return false;
+      }
+      if (this.disposed || this.state.phase !== "downloaded" || this.state.availableVersion !== version) return false;
+      this.dispatch({ type: "installing" });
+      if (!await this.prepareForInstall()) {
+        this.dispatch({ type: "install-cancelled" });
+        return false;
+      }
+      this.autoUpdater.quitAndInstall();
+      return true;
+    } catch (error) {
+      return this.fail(error, "install preparation failed");
+    } finally {
+      this.installing = false;
+    }
+  }
+
+  setAutoDownload(enabled) {
+    if (this.autoUpdater) this.autoUpdater.autoDownload = enabled === true;
+  }
+
+  markUpdated(version) { this.dispatch({ type: "updated", version }); }
+
+  claimNotice() {
+    const version = this.state.updatedTo;
+    if (version) this.dispatch({ type: "notice-claimed" });
+    return version;
+  }
+
+  dispose() {
+    this.disposed = true;
+    for (const [name, fn] of this.handlers) this.autoUpdater.removeListener(name, fn);
+    this.handlers.clear();
+    this.listeners.clear();
+  }
+}
+
+export async function createUpdaterController(options) {
+  const {
+    app, dialog, prepareForInstall,
+    platform = process.platform, arch = process.arch, env = process.env,
+    logger = console, now = Date.now,
+    loadUpdater = () => import("electron-updater"), autoDownload = true,
+  } = options;
+  let autoUpdater = null;
+  if (app.isPackaged && updaterSupported({ platform, arch, env })) {
+    try {
+      autoUpdater = resolveAutoUpdater(await loadUpdater());
+      if (!autoUpdater) throw new Error("electron-updater did not export autoUpdater");
+      autoUpdater.autoDownload = autoDownload;
+      autoUpdater.autoInstallOnAppQuit = false;
+    } catch (error) {
+      logger.error(`[desktop:update] updater unavailable: ${errorMessage(error)}`);
+      autoUpdater = null;
+    }
+  }
+  return new UpdateController({ app, dialog, prepareForInstall, logger, now }, autoUpdater);
 }

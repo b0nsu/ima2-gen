@@ -1,4 +1,5 @@
 import { Menu, Tray, nativeImage } from "electron";
+import { initialUpdateState, updatePending, trayUpdateItem, tooltipSuffix } from "./update-state.mjs";
 import { describeLauncher } from "./takeover-prompt.mjs";
 
 const STATE_LABEL = {
@@ -30,12 +31,13 @@ export class TrayController {
     this.tray = null;
     this.status = { state: "stopped", url: null, external: false };
     this.settings = {};
-    this.updatePending = false;
+    this.updateState = initialUpdateState({ active: Boolean(actions.updaterActive), currentVersion: "" });
+    this.whatsNew = null;
   }
 
   create() {
     if (this.tray) return this.tray;
-    this.tray = new Tray(loadTrayIcon(this.iconPath, this.platform));
+    this.tray = new Tray(loadTrayIcon(updatePending(this.updateState) ? this.updateIconPath : this.iconPath, this.platform));
     this.tray.setToolTip("ima2");
     if (this.platform === "win32") {
       this.tray.on("click", () => this.actions.toggleTrayPopup?.(this.bounds()));
@@ -64,13 +66,28 @@ export class TrayController {
     this.render();
   }
 
-  setUpdatePending(pending) {
-    if (this.updatePending === pending) return;
-    this.updatePending = pending;
-    if (this.tray && this.platform !== "darwin") {
-      this.tray.setImage(loadTrayIcon(pending ? this.updateIconPath : this.iconPath, this.platform));
+  setUpdateState(state) {
+    const changed = updatePending(this.updateState) !== updatePending(state);
+    this.updateState = { ...state };
+    if (state.updatedTo) this.whatsNew = state.updatedTo;
+    if (this.tray && changed) {
+      this.tray.setImage(loadTrayIcon(updatePending(state) ? this.updateIconPath : this.iconPath, this.platform));
     }
     this.render();
+  }
+
+  updateMenuItems() {
+    const item = trayUpdateItem(this.updateState);
+    const actionMap = {
+      check: () => this.actions.checkForUpdates(),
+      download: () => this.actions.downloadUpdate(),
+      install: () => this.actions.installUpdate({ confirm: false }),
+    };
+    const version = this.updateState.updatedTo || this.whatsNew;
+    return [
+      ...(item ? [{ label: item.label, enabled: item.enabled, click: actionMap[item.action] }] : []),
+      ...(version ? [{ label: `What's New in v${version}`, click: () => this.actions.openReleaseNotes(version) }] : []),
+    ];
   }
 
   statusLine() {
@@ -86,7 +103,6 @@ export class TrayController {
 
   menuTemplate() {
     const running = this.status.state === "running";
-    const updater = Boolean(this.actions.updaterActive);
     const guest = this.status.ownership === "guest" ? this.status.guest : null;
     return [
       { label: this.statusLine(), enabled: false },
@@ -101,7 +117,7 @@ export class TrayController {
       { label: this.status.state === "stopped" ? "Start Server" : "Restart Server", click: () => this.actions.restartServer(), enabled: !guest },
       { label: "Open Server Log", click: () => this.actions.openLogs() },
       { type: "separator" },
-      { label: this.updatePending ? "Update Ready — Restart to Install…" : "Check for Updates…", enabled: updater, visible: updater, click: () => this.actions.checkForUpdates() },
+      ...this.updateMenuItems(),
       { label: "Settings…", click: () => this.actions.openSettings() },
       { type: "separator" },
       { label: "Quit ima2", click: () => this.actions.quit() },
@@ -111,7 +127,7 @@ export class TrayController {
   render() {
     if (!this.tray) return;
     this.tray.setContextMenu(Menu.buildFromTemplate(this.menuTemplate()));
-    this.tray.setToolTip(`ima2 — ${this.statusLine()}`.slice(0, 127));
+    this.tray.setToolTip(`ima2 — ${this.statusLine()}${tooltipSuffix(this.updateState)}`.slice(0, 127));
   }
 
   /** One-time Windows balloon explaining that closing the window keeps ima2 in the tray. */

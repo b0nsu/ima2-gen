@@ -10,6 +10,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   menubarOnly: false,
   keepRunningOnClose: true,
   autoUpdate: true,
+  lastRunVersion: "",
   devLogging: false,
   nodeBinary: "",
   configDir: "",
@@ -18,7 +19,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
 });
 
 const BOOL_KEYS = ["openAtLogin", "startHidden", "menubarOnly", "keepRunningOnClose", "autoUpdate", "devLogging"];
-const STR_KEYS = ["nodeBinary", "configDir"];
+const STR_KEYS = ["nodeBinary", "configDir", "lastRunVersion"];
 const ENUM_KEYS = { existingServer: ["ask", "attach", "takeover"] };
 
 export function sanitizeSettings(input) {

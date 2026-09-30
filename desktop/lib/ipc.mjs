@@ -33,7 +33,11 @@ export function registerIpc({ settingsStore, supervisor, actions, info }) {
     userData: app.getPath("userData"),
     updaterActive: actions.updaterActive,
   }));
-  handle("desktop:check-updates", () => actions.checkForUpdates());
+  handle("desktop:check-updates", () => actions.checkForUpdates(), { allowServed: true });
+  handle("desktop:update:get", () => actions.updateState(), { allowServed: true });
+  handle("desktop:update:download", () => actions.downloadUpdate(), { allowServed: true });
+  handle("desktop:update:install", () => actions.installUpdate({ confirm: true }), { allowServed: true });
+  handle("desktop:update:claim-notice", () => actions.claimUpdateNotice(), { allowServed: true });
   handle("desktop:server:restart", () => actions.restartServer());
   handle("desktop:server:use-bundled", () => actions.useBundledServer());
   handle("desktop:open-app", () => actions.openApp());

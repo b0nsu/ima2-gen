@@ -16,6 +16,33 @@ function renderStatus(status) {
   $("browser").disabled = state !== "running";
 }
 
+function renderUpdate(state) {
+  const phase = state.phase;
+  const version = state.availableVersion;
+  const visible = ["available", "downloading", "downloaded"].includes(phase) || (phase === "error" && version);
+  $("update").hidden = !visible;
+  if (!visible) return;
+  const texts = {
+    available: `Update v${version} available`,
+    downloading: `Downloading v${version}… ${state.progress ?? 0}%`,
+    downloaded: `Update v${version} is ready`,
+    error: `Update failed: ${state.error}`,
+  };
+  const button = $("update-action");
+  $("update-text").textContent = texts[phase];
+  button.textContent = phase === "downloaded" ? "Restart to Update" : phase === "error" ? "Retry" : "Download";
+  button.disabled = phase === "downloading";
+  button.onclick = () => { void (phase === "downloaded" ? bridge.installUpdate() : bridge.downloadUpdate()); };
+}
+
+async function refreshUpdate() {
+  try {
+    renderUpdate(await bridge.getUpdateState());
+  } catch (error) {
+    console.warn("tray update state failed", error);
+  }
+}
+
 function elapsed(startedAt) {
   if (!startedAt) return "";
   const s = Math.max(0, Math.round((Date.now() - startedAt) / 1000));
@@ -83,6 +110,7 @@ function setVisible(visible) {
   timer = null;
   if (!visible) return;
   void refresh();
+  void refreshUpdate();
   timer = setInterval(refresh, REFRESH_MS);
 }
 
@@ -92,6 +120,7 @@ $("browser").addEventListener("click", act(bridge.openInBrowser));
 $("folder").addEventListener("click", act(bridge.openGenerated));
 $("settings").addEventListener("click", act(bridge.openSettings));
 $("quit").addEventListener("click", () => void bridge.quit());
+bridge.onUpdateState(renderUpdate);
 bridge.onStatus(renderStatus);
 bridge.onTrayVisibility(setVisible);
 setVisible(true);

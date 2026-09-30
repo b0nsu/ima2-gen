@@ -2580,5 +2580,19 @@
     "resetDefaults": "Reset to defaults",
     "compatTitle": "NovelAI lane",
     "compatBody": "Text-to-image only. Reference images, editing, and batch counts are not available on this lane."
+  },
+  "update": {
+    "available": "Update available: v{version}",
+    "download": "Download update v{version}",
+    "downloading": "Downloading update v{version}… {progress}%",
+    "ready": "Restart to update (v{version})",
+    "retry": "Retry update v{version}",
+    "popoverTitle": "ima2 v{version} is available",
+    "runCommand": "Run this in a terminal:",
+    "copy": "Copy",
+    "copied": "Command copied",
+    "whatsNew": "What’s new",
+    "dismiss": "Dismiss",
+    "updatedTo": "ima2 updated to v{version}"
   }
 }

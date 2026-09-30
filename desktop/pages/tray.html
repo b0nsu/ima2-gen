@@ -16,6 +16,10 @@
     </div>
     <button id="settings" class="tray__icon" title="Settings" aria-label="Settings">⚙</button>
   </header>
+  <section id="update" class="tray__update" hidden>
+    <span id="update-text" role="status" aria-live="polite"></span>
+    <button id="update-action" class="primary"></button>
+  </section>
   <section class="tray__section">
     <h2>Generating <span id="job-count" class="tray__count">0</span></h2>
     <ul id="jobs" class="tray__jobs"></ul>

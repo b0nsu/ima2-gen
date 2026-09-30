@@ -352,7 +352,14 @@ test("hosted real app: expiry and disposal close admitted SSE before server clos
     const stream = await isolation.fetchOwned(server, `${base}/api/events`, { headers: { cookie }, signal: AbortSignal.timeout(5000) });
     assert.equal(stream.status, 200); const reader = stream.body!.getReader();
     publish("session-teardown", "progress", { synthetic: true });
-    assert.equal((await reader.read()).done, false);
+    // The stream opens with the id-less update hint (routes/update.ts updateHintFrame); read
+    // through it so the next read below observes the close, not a buffered frame.
+    const decoder = new TextDecoder();
+    for (let seen = ""; !seen.includes('"jobId":"session-teardown"');) {
+      const chunk = await reader.read();
+      assert.equal(chunk.done, false);
+      seen += decoder.decode(chunk.value, { stream: true });
+    }
     if (reason === "expiry") {
       clock += config.security.lanSessionTtlMs + 1;
       const expired = await isolation.fetchOwned(server, `${base}/api/auth/lan/session`, { headers: { cookie } });

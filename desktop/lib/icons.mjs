@@ -5,11 +5,12 @@ const REQUIRED = [
   "icon.png", "icon.ico",
   "tray.png", "tray.ico", "tray-update.png", "tray-update.ico",
   "trayTemplate.png", "trayTemplate@2x.png",
+  "trayUpdateTemplate.png", "trayUpdateTemplate@2x.png",
 ];
 
 /** Tray image per platform: ICO on Windows (per-DPI frames), template glyph on macOS, PNG on Linux. */
 export function trayIconName(platform, { update = false } = {}) {
-  if (platform === "darwin") return "trayTemplate.png";
+  if (platform === "darwin") return update ? "trayUpdateTemplate.png" : "trayTemplate.png";
   const stem = update ? "tray-update" : "tray";
   return platform === "win32" ? `${stem}.ico` : `${stem}.png`;
 }

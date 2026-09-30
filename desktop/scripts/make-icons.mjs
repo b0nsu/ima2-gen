@@ -63,6 +63,19 @@ async function trayPng(size, withDot) {
   return sharp(await base.toBuffer()).composite([{ input: updateDot(size) }]).png().toBuffer();
 }
 
+async function updateTemplate(size) {
+  const r = Math.round(size * 0.18);
+  const ring = Math.max(1, Math.round(size * 0.06));
+  const cx = size - r - 1;
+  const cy = r + 1;
+  const circle = (radius) => Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}"><circle cx="${cx}" cy="${cy}" r="${radius}" fill="#000"/></svg>`);
+  const glyph = await sharp(templateGlyph()).resize(size, size, { fit: "contain", background: CLEAR }).png().toBuffer();
+  return sharp(glyph).composite([
+    { input: circle(r + ring), blend: "dest-out" },
+    { input: circle(r), blend: "over" },
+  ]).png().toBuffer();
+}
+
 async function writeIco(file, sizes, render) {
   const frames = [];
   for (const size of sizes) frames.push({ size, png: await render(size) });
@@ -86,6 +99,9 @@ export async function generateIcons(outDir = defaultOutDir) {
       .resize(size, size, { fit: "contain", background: CLEAR })
       .png()
       .toFile(join(outDir, name));
+  }
+  for (const [name, size] of [["trayUpdateTemplate.png", 22], ["trayUpdateTemplate@2x.png", 44]]) {
+    writeFileSync(join(outDir, name), await updateTemplate(size));
   }
   return outDir;
 }
