@@ -44,9 +44,7 @@ if (process.argv[2] === "doctor" && process.argv.slice(3).includes("--installati
 const { config: runtimeConfig } = await import("../config.js");
 const { doctor } = await import("./commands/doctor.js");
 const { maybePromptGithubStar } = await import("./lib/star-prompt.js");
-// Config lives under runtimeConfig.storage.configDir (honors IMA2_CONFIG_DIR).
-// Legacy installs that stored config at <packageRoot>/.ima2/config.json will be
-// migrated on first write.
+// Config honors IMA2_CONFIG_DIR; legacy package-local config migrates on first write.
 const CONFIG_DIR = runtimeConfig.storage.configDir;
 const CONFIG_FILE = runtimeConfig.storage.configFile;
 const LEGACY_CONFIG_FILE = join(ROOT, ".ima2", "config.json");
@@ -306,10 +304,7 @@ async function showStatus() {
   console.log("");
 }
 
-/**
- * Auth verdicts for `ima2 status`. When a server is advertised, its live proxy verdict is
- * folded in: a session file can look fine while ChatGPT has already revoked it.
- */
+/** Fold an advertised server's live proxy verdict into the stored auth status. */
 async function buildAuthReport() {
   const { gptAuthStatus, grokAuthStatus } = await import("../lib/authStatus.js");
   const { resolveChatgptSession } = await import("../lib/chatgptAuth.js");
@@ -356,7 +351,7 @@ if (args.includes("-v") || args.includes("--version")) {
   exitFlushed(0);
 }
 
-const helpOwningCommands = ["doctor", "gen", "video", "edit", "vectorize", "ls", "show", "ps", "cancel", "session", "history", "prompt", "multimode", "node", "annotate", "canvas-versions", "metadata", "comfy", "cardnews", "inflight", "storage", "billing", "providers", "oauth", "grok", "gpt", "login", "config", "defaults", "models", "capabilities", "tools", "skill", "ping", "backfill-thumbs", "service", "start", "restart", "stop", "logs"];
+const helpOwningCommands = ["update", "doctor", "gen", "video", "edit", "vectorize", "ls", "show", "ps", "cancel", "session", "history", "prompt", "multimode", "node", "annotate", "canvas-versions", "metadata", "comfy", "cardnews", "inflight", "storage", "billing", "providers", "oauth", "grok", "gpt", "login", "config", "defaults", "models", "capabilities", "tools", "skill", "ping", "backfill-thumbs", "service", "start", "restart", "stop", "logs"];
 if (!command) {
   showHelp();
   exitFlushed(1);
@@ -366,7 +361,15 @@ if ((args.includes("-h") || args.includes("--help")) && !helpOwningCommands.incl
   exitFlushed(0);
 }
 
+const { printUpdateNotice } = await import("./lib/updateNotice.js");
+printUpdateNotice(command, args, pkg.version);
 switch (command) {
+  case "update": {
+    const { default: updateCmd } = await import("./commands/update.js");
+    await updateCmd(args.slice(1));
+    exitFlushed(Number(process.exitCode ?? 0));
+    break;
+  }
   case "serve":
     if (args.includes("--background")) {
       const { runRuntimeCommand } = await import("./commands/runtimeCommands.js");
