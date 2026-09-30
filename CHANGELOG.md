@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.26.0] - 2026-09-30
+
 ### Added
 
 - **Update notices and `ima2 update`** — an npm install checks the registry for a newer ima2 at most once every 20 hours while the server runs (preview installs follow the `preview` tag) and caches the answer in `~/.ima2/version.json`. Interactive commands such as `ima2 serve`, `ima2 start` and `ima2 status` print one line when an update is waiting, and the web UI shows an update button in the top strip (a floating pill on phones) with the command to run, release notes and Dismiss. `ima2 update` installs the new version globally, restarts the login service or background server it owns and waits until the new version answers; `--check`, `--tag latest|preview`, `--yes` and `--json` are supported. After an update the CLI or the web UI says "ima2 updated to vX" once. `IMA2_DISABLE_UPDATE_CHECK=1` turns the automatic check off.
