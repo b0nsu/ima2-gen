@@ -5,6 +5,8 @@ import { ClassicWorkspace } from "./components/classic/ClassicWorkspace";
 import { RightPanel } from "./components/RightPanel";
 import { HistoryStrip } from "./components/HistoryStrip";
 import { Toast } from "./components/Toast";
+import { UpdateNoticeHost } from "./components/UpdateNoticeHost";
+import "./styles/update-indicator.css";
 import { ErrorCard } from "./components/ErrorCard";
 import { GalleryModal } from "./components/GalleryModal";
 import { CustomSizeConfirmModal } from "./components/CustomSizeConfirmModal";
@@ -221,6 +223,7 @@ export default function App() {
       <CustomSizeConfirmModal />
       <TrashUndoToast />
       <Toast />
+      <UpdateNoticeHost />
       <ErrorCard />
       <GalleryModal />
       <MetadataRestoreDialog />

@@ -2580,5 +2580,19 @@
     "resetDefaults": "기본값으로 되돌리기",
     "compatTitle": "NovelAI 레인",
     "compatBody": "텍스트로 이미지를 만드는 것만 됩니다. 참조 이미지, 편집, 여러 장 생성은 이 레인에서 지원하지 않습니다."
+  },
+  "update": {
+    "available": "업데이트 가능: v{version}",
+    "download": "v{version} 업데이트 다운로드",
+    "downloading": "v{version} 업데이트 다운로드 중… {progress}%",
+    "ready": "다시 시작하여 업데이트 (v{version})",
+    "retry": "v{version} 업데이트 재시도",
+    "popoverTitle": "ima2 v{version} 업데이트가 있습니다",
+    "runCommand": "터미널에서 다음 명령을 실행하세요:",
+    "copy": "복사",
+    "copied": "명령어를 복사했습니다",
+    "whatsNew": "변경 사항",
+    "dismiss": "알림 닫기",
+    "updatedTo": "ima2가 v{version} 버전으로 업데이트되었습니다"
   }
 }

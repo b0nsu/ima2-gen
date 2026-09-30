@@ -1,6 +1,7 @@
 import { useI18n } from "../i18n";
 import { desktopBridge, isWindowsDesktop } from "../lib/desktopShell";
 import { IconSettings } from "./NavRail";
+import { UpdateIndicator } from "./UpdateIndicator";
 
 interface SidebarTopStripProps {
   collapsed: boolean;
@@ -55,6 +56,7 @@ export function SidebarTopStrip({ collapsed, onToggle, controlsId, panelCollapse
         >
           <IconPanelLeft />
         </button>
+        <UpdateIndicator variant="strip" trailing={!bridge?.openSettings} />
         {bridge?.openSettings ? (
           <button
             type="button"
