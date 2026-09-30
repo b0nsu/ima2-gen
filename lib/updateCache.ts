@@ -48,12 +48,34 @@ export function readVersionCache(path = versionCachePath()): VersionCache {
   };
 }
 
+// Windows refuses to replace a file another process has open (EPERM/EBUSY/EACCES) for a moment;
+// concurrent writers and readers of version.json hit that window, so the rename retries briefly.
+const RENAME_RETRY_CODES = new Set(["EPERM", "EBUSY", "EACCES"]);
+const RENAME_ATTEMPTS = 20;
+const RENAME_RETRY_MS = 25;
+
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function renameWithRetry(from: string, to: string): void {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      renameSync(from, to);
+      return;
+    } catch (error) {
+      if (attempt >= RENAME_ATTEMPTS || !RENAME_RETRY_CODES.has(errInfo(error).code ?? "")) throw error;
+      sleepSync(RENAME_RETRY_MS);
+    }
+  }
+}
+
 function writeOwner(path: string, value: unknown): void {
   mkdirSync(dirname(path), { recursive: true });
   const tmp = `${path}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
   try {
     writeFileSync(tmp, JSON.stringify(value, null, 2) + "\n", { mode: 0o600 });
-    renameSync(tmp, path);
+    renameWithRetry(tmp, path);
   } catch (error) {
     try { unlinkSync(tmp); } catch { /* best-effort removal after a failed atomic write */ }
     throw error;

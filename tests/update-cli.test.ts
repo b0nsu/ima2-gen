@@ -30,7 +30,7 @@ function fixture(overrides: Partial<UpdateDeps> = {}) {
   const lines: string[] = [], errors: string[] = [], order: string[] = [];
   const calls: Array<{ cmd: string; args: string[]; opts: Parameters<Exec>[2] }> = [];
   const deps: UpdateDeps = {
-    current: "1.0.0", pkgDir: "/global/ima2-gen", fs: { ...fakeFs, readFile: () => { order.push("verify"); return '{"version":"2.0.0"}'; } },
+    current: "1.0.0", pkgDir: join("/global", "ima2-gen"), fs: { ...fakeFs, readFile: () => { order.push("verify"); return '{"version":"2.0.0"}'; } },
     exec: (cmd, args, opts) => {
       calls.push({ cmd, args, opts });
       if (args.includes("root")) return { status: 0, stdout: "/global\n", stderr: "" };
@@ -56,7 +56,7 @@ function fixture(overrides: Partial<UpdateDeps> = {}) {
 
 test("classify source before querying npm (server.ts or .git)", () => {
   for (const name of ["server.ts", ".git"]) {
-    assert.equal(classifyInstall("/src", noExec, { ...fakeFs, exists: (p) => p === `/src/${name}` }).kind, "source");
+    assert.equal(classifyInstall("/src", noExec, { ...fakeFs, exists: (p) => p === join("/src", name) }).kind, "source");
   }
 });
 test("classify global by canonical path, then npx/local/unknown", () => {
@@ -106,7 +106,7 @@ test("manifest verification handles invalid/missing metadata and new CLI executi
   assert.equal(readInstalledVersion("/pkg", fakeFs), "2.0.0");
   for (const text of ["bad", "null", '{}', '{"version":"bad"}']) assert.equal(readInstalledVersion("/pkg", { ...fakeFs, readFile: () => text }), null);
   assert.equal(runNewCli("/pkg", ["restart"], (cmd, args, opts) => {
-    assert.equal(cmd, process.execPath); assert.deepEqual(args, ["/pkg/bin/ima2.js", "restart"]);
+    assert.equal(cmd, process.execPath); assert.deepEqual(args, [join("/pkg", "bin", "ima2.js"), "restart"]);
     assert.equal(opts?.inherit, true); return { status: null, stdout: "", stderr: "" };
   }), 1);
   assert.equal(defaultExec(process.execPath, ["-e", 'process.stdout.write("ok")']).stdout, "ok");
@@ -239,7 +239,7 @@ test("install verifies, marks seen in isolated cache, and invokes the new servic
   const f = fixture({ markSeen: (v) => { f.order.push(`seen:${v}`); markSeen(v, path); } });
   assert.equal(await runUpdate(["--yes"], f.deps), 0);
   assert.deepEqual(f.order, ["check", "runtime", "install", "verify", "seen:2.0.0", "restart", "runtime"]);
-  assert.deepEqual(f.calls.at(-1)?.args, ["/global/ima2-gen/bin/ima2.js", "service", "restart"]);
+  assert.deepEqual(f.calls.at(-1)?.args, [join("/global", "ima2-gen", "bin", "ima2.js"), "service", "restart"]);
   assert.equal(readVersionCache(path).last_seen_version, "2.0.0");
 });
 test("check/installation/mismatch failures stop before restart and do not mark seen", async () => {
