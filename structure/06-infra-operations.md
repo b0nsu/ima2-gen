@@ -191,13 +191,22 @@ able to approve. Configure a tag ruleset restricting `desktop-v*` creation befor
 first live release; without it any actor with push access can mint the tag that
 spends the repository signing secrets.
 
-`electron-updater@6.8.9` is active only in a packaged `darwin/arm64` app. It checks
-once after the local server starts and exposes `Check for Updates…` in the macOS app
-menu. Automatic download and install-on-quit are disabled: the user approves
-download and then restart separately. Before `quitAndInstall()`, the app stops and
-disposes the local server. Draft releases stay invisible to installed updaters
-until the approved publication above. A live signed two-version update remains
-separate follow-up proof.
+`electron-updater@6.8.9` is active only in a packaged `darwin/arm64` app, an NSIS
+Windows install or a Linux AppImage. It checks once after the local server starts and
+every six hours while Auto-update is on. `desktop/lib/update-state.mjs` reduces its events
+into one snapshot (idle, checking, current, available, downloading, downloaded, installing,
+error) that drives the menu bar icon (a template dot on macOS, `tray-update.*` elsewhere),
+the tray and app menus, the tray popup banner and the served UI (IPC `desktop:update:*`).
+Install-on-quit stays off: every install asks first (IPC installs always show the native
+dialog), then the app stops and disposes the local server before `quitAndInstall()`.
+After an update relaunch, `lastRunVersion` in the desktop settings yields one "ima2 updated
+to vX" notification. Draft releases stay invisible to installed updaters until the approved
+publication above.
+
+npm installs keep their own update state under the config dir: `version.json` (registry
+checks, 20 h freshness, hourly scheduler with backoff in the server, off for desktop-launched
+servers and with `IMA2_DISABLE_UPDATE_CHECK=1`), `update-dismissed.json` and
+`update-seen/<version>` markers created exclusively so "updated to vX" shows once.
 
 ## Script Surface
 

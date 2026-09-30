@@ -19,6 +19,8 @@ import { configureLogger, logError, logWarn } from "./lib/logger.js";
 import { createRequestLogger } from "./lib/requestLogger.js";
 import { configureApiCachePolicy } from "./lib/apiCachePolicy.js";
 import { configureRoutes } from "./routes/index.js";
+import { startUpdateScheduler, updateChecksEnabled } from "./lib/updateCheck.js";
+import { defaultTag } from "./lib/updateVersion.js";
 import { API_REQUEST_POLICY, config } from "./config.js";
 import { createApiRequestBudget } from "./lib/apiRequestBudget.js";
 import { createLocalLanAccess, createLanApiGuard as tokenOnlyLanApiGuard } from "./lib/localLanAccess.js";
@@ -493,9 +495,11 @@ export async function startServer(overrides: StartServerOverrides = {}) {
 
   let server: import("node:net").Server;
   let reapTimer: NodeJS.Timeout;
+  let updateScheduler: { stop(): void } | null = null;
   let tempReferenceReapTimer: NodeJS.Timeout | undefined;
 
   onShutdown(async () => {
+    updateScheduler?.stop();
     unadvertise(ctx);
     try { oauthChild?.stop?.(); } catch { /* best-effort: OAuth child may already be stopped */ }
     try { oauthChild?.kill?.(); } catch { /* best-effort: OAuth child may already be stopped */ }
@@ -532,6 +536,9 @@ export async function startServer(overrides: StartServerOverrides = {}) {
   console.log(`Image Gen running at ${ctx.serverUrl}`);
   console.log(`Provider policy: GPT OAuth, API-key Responses, and Grok (xAI OAuth or API key) providers. GPT OAuth ${ctx.oauthTransport === "native" ? "calls ChatGPT directly" : `uses ${ctx.oauthUrl}`}.`);
   advertise(ctx);
+  if (updateChecksEnabled(process.env, ctx.launcher)) {
+    updateScheduler = startUpdateScheduler({ tag: defaultTag(ctx.packageVersion), log: (m) => console.log(m) });
+  }
   try {
     const s = ensureDefaultSession();
     if (s) console.log(`[db] default session: ${s.id} (${s.title})`);

@@ -2580,5 +2580,19 @@
     "resetDefaults": "恢复默认值",
     "compatTitle": "NovelAI 通道",
     "compatBody": "仅支持文生图。该通道不支持参考图、编辑与批量生成。"
+  },
+  "update": {
+    "available": "有可用更新：v{version}",
+    "download": "下载 v{version} 更新",
+    "downloading": "正在下载 v{version} 更新… {progress}%",
+    "ready": "重启以更新至 v{version}",
+    "retry": "重试 v{version} 更新",
+    "popoverTitle": "ima2 v{version} 已发布",
+    "runCommand": "在终端中运行以下命令：",
+    "copy": "复制",
+    "copied": "命令已复制",
+    "whatsNew": "更新内容",
+    "dismiss": "忽略",
+    "updatedTo": "ima2 已更新至 v{version}"
   }
 }

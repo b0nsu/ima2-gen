@@ -1,0 +1,100 @@
+.update-indicator-anchor {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+  pointer-events: auto;
+  -webkit-app-region: no-drag;
+}
+
+.update-indicator { position: relative; }
+.update-indicator__dot {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 7px;
+  height: 7px;
+  border-radius: var(--r-pill);
+  background: var(--accent);
+  outline: 2px solid var(--bg);
+  pointer-events: none;
+}
+.update-indicator[aria-disabled="true"] { cursor: default; }
+.update-indicator[aria-disabled="true"]:active { transform: none; }
+
+.update-indicator-anchor--floating {
+  position: fixed;
+  top: calc(env(safe-area-inset-top, 0px) + 10px);
+  right: calc(env(safe-area-inset-right, 0px) + 12px);
+  /* Below dialogs (80+) and mobile sheets, above workspace controls. */
+  z-index: 65;
+}
+.update-indicator--floating {
+  width: auto;
+  min-width: 44px;
+  height: 44px;
+  gap: 7px;
+  padding: 0 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-pill);
+  background: var(--surface);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+.update-indicator--floating .update-indicator__dot { top: 7px; right: 7px; }
+
+.update-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  box-sizing: border-box;
+  width: 310px;
+  max-width: calc(100vw - 24px);
+  padding: 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.update-indicator-anchor--strip .update-popover {
+  /* A collapsed or sidebar-less strip hugs the left edge of the viewport. */
+  left: 0;
+  right: auto;
+}
+.update-popover h2 { margin: 0 0 8px; font-size: 13px; font-weight: 600; text-wrap: balance; }
+.update-popover p { margin: 0 0 6px; color: var(--text-dim); text-wrap: balance; }
+.update-popover code {
+  display: block;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg);
+  font-family: var(--mono);
+  overflow-wrap: anywhere;
+}
+.update-popover__actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; }
+.update-popover__actions button,
+.update-popover__actions a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  padding: 4px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+  background: var(--control-bg);
+  color: var(--text);
+  font: inherit;
+  text-decoration: none;
+  cursor: pointer;
+}
+.update-popover__actions button:hover,
+.update-popover__actions a:hover { background: var(--control-hover); }
+.update-popover__actions button:focus-visible,
+.update-popover__actions a:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+
+/* The dense strip retains its existing 30px targets; floating touch controls
+   use a full 44px hit area. No expanding hit area may overlap adjacent buttons. */
+.app:has(.update-indicator-anchor--strip) { --chrome-strip-w: calc(var(--tl-inset) + 110px); }

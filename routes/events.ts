@@ -2,6 +2,7 @@ import type { Express, Request, Response } from "express";
 import type { RouteRuntimeContext } from "../lib/runtimeContext.js";
 import { subscribe, replaySince, hasReplayGap, replayOldestId, latestEventId, MAX_SSE_LISTENERS, type BusEvent } from "../lib/eventBus.js";
 import { SSE_STREAM_POLICY } from "../lib/eventsPolicy.js";
+import { updateHintFrame } from "./update.js";
 
 let activeConnections = 0;
 const HEARTBEAT_MS = 15_000;
@@ -28,7 +29,7 @@ class EventConnection {
   private heartbeat: ReturnType<typeof setInterval> | undefined;
   private deadline: ReturnType<typeof setTimeout> | undefined;
 
-  constructor(private req: Request, private res: Response, private cursor: number) {}
+  constructor(private req: Request, private res: Response, private cursor: number, private hint: string | null = null) {}
 
   start(): void {
     activeConnections++;
@@ -44,6 +45,7 @@ class EventConnection {
       this.res.setHeader("x-ima2-event-cursor", String(this.cursor));
       this.res.flushHeaders?.();
       if (this.closed) return;
+      if (this.hint) this.write(this.hint);
       this.unsubscribe = subscribe(this.live);
       this.pump();
       if (!this.closed) this.heartbeat = setInterval(this.ping, HEARTBEAT_MS);
@@ -134,7 +136,7 @@ class EventConnection {
   };
 }
 
-export function registerEventsRoute(app: Express, _ctx: RouteRuntimeContext) {
+export function registerEventsRoute(app: Express, ctx: RouteRuntimeContext) {
   app.get("/api/events", (req, res) => {
     if (activeConnections >= MAX_SSE_LISTENERS) {
       return res.status(503).json({
@@ -146,6 +148,6 @@ export function registerEventsRoute(app: Express, _ctx: RouteRuntimeContext) {
     const queryLastId = parseInt(String(req.query.lastEventId ?? ""), 10);
     const lastId = Number.isSafeInteger(headerLastId) ? headerLastId : queryLastId;
     const cursor = Number.isSafeInteger(lastId) ? Math.max(0, lastId) : latestEventId();
-    new EventConnection(req, res, cursor).start();
+    new EventConnection(req, res, cursor, updateHintFrame(ctx)).start();
   });
 }

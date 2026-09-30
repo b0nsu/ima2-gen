@@ -48,6 +48,10 @@ needs `ima2 stop --service`; a server started by the desktop app is restarted fr
 
 Use `ima2 doctor` when setup, GPT OAuth, storage, or package integrity is unclear.
 
+Update a global install with `ima2 update --check` (report only) or `ima2 update --yes`
+(install, restart the service or background server, verify the new version). Add `--json`
+for one machine-readable result. It refuses source checkouts and npx runs.
+
 ## Generate Images
 
 List ready image lanes, choose a persistent CLI target, then generate:

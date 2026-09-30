@@ -1,9 +1,17 @@
 // Minimal bridge exposed by desktop/preload.cjs to the served UI. Present only
 // inside the Electron shell — browser sessions get nothing, so its presence is
 // also the "am I in the desktop app" check. Keep in sync with preload.cjs.
+import type { DesktopUpdateState } from "./updateStatus";
+
 export interface DesktopBridge {
   platform?: string;
   openSettings?: () => void;
+  getUpdateState?: () => Promise<DesktopUpdateState>;
+  checkForUpdates?: () => Promise<boolean>;
+  downloadUpdate?: () => Promise<boolean>;
+  installUpdate?: () => Promise<boolean>;
+  claimUpdateNotice?: () => Promise<string | null>;
+  onUpdateState?: (callback: (state: DesktopUpdateState) => void) => () => void;
 }
 
 declare global {

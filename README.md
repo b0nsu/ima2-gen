@@ -165,11 +165,18 @@ See [docs/DOCKER.md](docs/DOCKER.md) for compose usage, required environment, an
 
 Video generation needs Grok OAuth (option 2 or 3). If you already use GPT OAuth, run `ima2 grok login` to add video; it defaults to the manual-paste flow.
 
-To update, stop the server with Ctrl+C (or `ima2 stop` from another terminal), then run:
+To update, run:
 
 ```bash
-npm install -g ima2-gen@latest
+ima2 update            # or: ima2 update --check
 ```
+
+It installs the latest release globally, restarts the login service or background server
+it owns, and waits until the new version answers. A server running in a terminal
+(`ima2 serve`) only needs a restart afterwards. ima2 tells you when an update is waiting:
+interactive commands print one line and the web UI shows an update button in the top
+strip. Set `IMA2_DISABLE_UPDATE_CHECK=1` to turn the background check off. Without the
+command, stop the server with Ctrl+C (or `ima2 stop`) and run `npm install -g ima2-gen@latest`.
 
 Ctrl+C shuts down cleanly: it closes the database, stops child processes and releases file locks. If an install fails, check the reported npm permissions or stop the specific `ima2` process yourself; the installer does not perform broad process cleanup.
 
@@ -269,6 +276,7 @@ Grok video generation defaults to canonical `grok-imagine-video-1.5`; `grok-imag
 | `ima2 logs [-n N] [-f]` | Show or follow the background server log |
 | `ima2 service <sub>` | Background service: `install`/`uninstall`/`start`/`stop`/`restart`/`status`/`logs`/`repair` — launchd on macOS, systemd user unit on Linux, auto-start on login with crash restart |
 | `ima2 setup` | Reconfigure saved auth |
+| `ima2 update [--check] [--tag latest\|preview] [--yes] [--json]` | Update a global npm install and restart the service or background server it owns; `--check` only reports |
 | `ima2 status` | Show config and OAuth status |
 | `ima2 doctor` | Diagnose Node, package, config, and auth |
 | `ima2 doctor image-probe [--json]` | Run sanitized image probes for no-image diagnostics |

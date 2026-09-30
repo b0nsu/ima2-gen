@@ -104,6 +104,18 @@ async function snapshot(dir) {
 }
 
 describe("CLI help safety", () => {
+  it("update --help leaves its config directory empty", async () => {
+    const root = await mkdtemp(join(tmpdir(), "ima2-update-help-"));
+    try {
+      const result = await runCLI(["update", "--help"], { IMA2_CONFIG_DIR: root });
+      assert.equal(result.timedOut, false);
+      assert.equal(result.code, 0);
+      assert.match(result.stdout, /Usage: ima2 update/);
+      assert.deepEqual(await readdir(root), []);
+    } finally {
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  });
   it("backfill-thumbs --help leaves generated files unchanged", async () => {
     const root = await mkdtemp(join(tmpdir(), "ima2-help-safety-"));
     const generated = join(root, "generated");

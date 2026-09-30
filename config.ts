@@ -128,6 +128,16 @@ export function defaultLogLevelForEnv(runtimeEnv = env) {
 
 export const config = {
   security: LAN_SECURITY_POLICY,
+  update: {
+    registry: (env.IMA2_NPM_REGISTRY || "https://registry.npmjs.org").replace(/\/+$/, ""),
+    freshMs: 20 * 60 * 60_000,
+    staleMs: 40 * 60 * 60_000,
+    tickMs: 60 * 60_000,
+    backoffMinMs: 60_000,
+    backoffMaxMs: 60 * 60_000,
+    timeoutMs: 8_000,
+    disabled: env.IMA2_DISABLE_UPDATE_CHECK === "1",
+  },
   diagnostics: {
     keyTimeoutMs: Math.min(30000, pickPositiveInt(env.IMA2_DIAGNOSTIC_KEY_TIMEOUT_MS, fileCfg.diagnostics?.keyTimeoutMs, 5000)),
     runtimeTimeoutMs: Math.min(30000, pickPositiveInt(env.IMA2_DIAGNOSTIC_RUNTIME_TIMEOUT_MS, fileCfg.diagnostics?.runtimeTimeoutMs, 1500)),
