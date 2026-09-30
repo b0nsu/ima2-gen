@@ -215,3 +215,11 @@ failing check; desktop ctx returns enabled:false and notice null without calling
   Tests: the 4-process claim test (exactly one prints the version), first-run null, upgrade once,
   downgrade null, concurrent check writes leave a valid version.json, a dismiss survives a concurrent
   check write (different files).
+
+## Amendments after audit round 4
+
+- A5d: claimUpdatedNotice returns current only when exclusive creation of its marker succeeds AND
+  current is greater than the HIGHEST marker that existed before the create (the same value the read
+  view reports as last_seen_version). Markers are permanent: no pruning (one empty file per installed
+  version is negligible). Tests add the mixed-history downgrade (markers 3.25.0 and 3.27.0, current
+  3.26.0 -> null) and a revisit of an already-claimed version -> null.
