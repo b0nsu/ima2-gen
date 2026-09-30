@@ -31,3 +31,9 @@
 The user asked to "patch and deploy" in this session: push, PR, merge to dev, the release command
 and its approvals are in scope. Signing or notarization failures that need a human secret are
 NEEDS_HUMAN, not something to bypass.
+- Audit fold (reviewer, wp3 A): scripts/release.mjs:218 opens the dev -> main promotion PR without a
+  screenshot, and the screenshot gate would fail on it. After the feature PR lands on dev, open the
+  promotion PR by hand (`gh pr create --base main --head dev`) with the same pr-assets screenshot
+  links, wait for its checks, then run the release command; ensurePromoted (release.mjs:236) reuses the
+  open promotion PR. The release runs from this maintainer checkout; `gh api repos/lidge-ai/ima2-gen`
+  reports admin permission, which the desktop-tag push needs.
