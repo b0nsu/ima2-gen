@@ -33,6 +33,7 @@ test("maps the explicit isolated environment exactly", () => {
     IMA2_PORT: "0",
     IMA2_HOST: "127.0.0.1",
     IMA2_NO_OAUTH_PROXY: "1",
+    IMA2_DISABLE_UPDATE_CHECK: "1",
     IMA2_OAUTH_PROXY_PORT: "41234",
     IMA2_MINIMAX_REGION: "global_en",
     IMA2_MINIMAX_GLOBAL_BASE_URL: stubUrl,
