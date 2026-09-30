@@ -1,5 +1,17 @@
 # 040 web UI update indicator and updated toast (wp2 task t4)
 
+
+## Amendments after audit round 1 (override R6 where they differ)
+
+- A7 (mobile, every mode): MobileAppBar is not changed. On mobile (useIsMobile), UpdateNoticeHost
+  renders `<UpdateIndicator variant="floating" />`: a fixed pill at the top-right below the safe-area
+  inset (z-index under modals), shown in every uiMode while settings are closed, hidden when the view is
+  hidden. On wider layouts SidebarTopStrip renders the `variant="strip"` button. IN map (final):
+  ui/src/lib/updateStatus.ts, ui/src/lib/updateStore.ts, ui/src/components/UpdateIndicator.tsx,
+  ui/src/components/UpdateNoticeHost.tsx, ui/src/styles/update-indicator.css (NEW);
+  ui/src/lib/desktopShell.ts, ui/src/components/SidebarTopStrip.tsx, ui/src/App.tsx (mount
+  `<UpdateNoticeHost />` next to `<Toast />` and import the stylesheet), four locale files (MODIFY).
+
 ## Scope
 
 IN: ui/src/lib/updateStatus.ts (NEW), ui/src/hooks/useUpdateStatus.ts (NEW),
@@ -86,4 +98,3 @@ C captures the npm popover and the badge in a running dev UI (agbrowse) with a s
   MobileAppBar (`variant="mobile"`). A separate `UpdateNoticeHost` component, mounted
   unconditionally in App.tsx next to `<Toast />`, performs the one-time notice claim and toast, so the
   notice fires in every layout even when no indicator is mounted.
-

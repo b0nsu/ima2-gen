@@ -1,5 +1,23 @@
 # 030 desktop updater states, menu bar dot, post-update notice (wp2 task t3)
 
+
+## Amendments after audit round 1
+
+- A1 (consent for renderer-initiated installs): controller.installUpdate({ confirm }) — when confirm is
+  true it first shows the existing Restart-and-Install dialog and returns false on "Later" without touching
+  the supervisor. Every IPC path (`desktop:update:install` from the popup or the served page) calls
+  installUpdate({ confirm: true }); only native tray/app menu clicks call installUpdate({ confirm: false }),
+  because the click is already on native UI the page cannot script. Test: served-style install with a
+  "Later" response never calls prepareForInstall or quitAndInstall.
+- A9 (existing tests): FakeAutoUpdater in tests/desktop-updater.test.ts gains an `emitCheck(result)` helper that
+  emits "checking-for-update" then "update-available"/"update-not-available" the way electron-updater 6.8.9
+  does, and "download-progress"/"update-downloaded" emitters. The source-text assertion at
+  tests/desktop-updater.test.ts:199 (literal "Check for Updates…" next to actions.checkForUpdates()) is
+  replaced with behavioural checks: trayUpdateItem(idle) is {label:"Check for Updates…", action:"check"},
+  and menu.mjs/tray.mjs route the "check" action to actions.checkForUpdates (source regex on the action
+  map). The ordering assertion (supervisor.start before the first check) and the prepareForInstall wiring
+  assertion stay.
+
 ## Scope
 
 IN: desktop/lib/update-state.mjs (NEW), desktop/lib/update-receipt.mjs (NEW);
@@ -165,4 +183,3 @@ opaque while a pixel between dot and glyph is transparent.
   main.mjs owns a `startBackgroundChecks()`/`stopBackgroundChecks()` pair (6 h interval, unref'd);
   onSettingsChanged starts or stops it when autoUpdate changes, next to the existing
   updater.setAutoDownload call (main.mjs:139). Tests cover the guard table and the toggle.
-

@@ -1,5 +1,32 @@
 # 020 ima2 update CLI (wp2 task t2)
 
+
+## Amendments after audit round 1 (override R4/R5 where they differ)
+
+- A2 (service ownership from the artifact): serviceOwned(pkgDir, configDir) reads the actual
+  artifact — the launchd plist (launchdPlistPath()) or systemd unit (systemdUnitPath()) — and
+  requires both: the server.js path in it (plist `<key>ProgramArguments</key>` second `<string>`,
+  bin/lib/serviceTemplates.ts:41-44; unit `ExecStart=<node> <serverJs>`, serviceTemplates.ts:67)
+  resolves inside realpath(pkgDir), and parseServiceConfigDir(artifact) (serviceManager.ts:70)
+  canonicalizes to the current config dir. Unreadable or unparsable artifacts count as not owned
+  and print "A login service exists but belongs to another install; not restarting it."
+  service-state.json is not consulted.
+- A3 (npm on every platform): `npmInvocation(platform, execPath)` returns how to run npm:
+  on win32, when `<dirname(execPath)>/node_modules/npm/bin/npm-cli.js` exists, run
+  `process.execPath [npm-cli.js, ...args]` with shell:false; otherwise `npm.cmd` with shell:true and
+  only fixed arguments plus a parseVersion-validated version. POSIX: `npm` with shell:false.
+  globalRoot() and installGlobal() both use it. Tests cover the three shapes.
+- A4 (runtime adapter): `runtimeSnapshot()` wraps collectRuntimeStatus() (bin/commands/runtimeStatus.ts:22):
+  {live: report.liveness === "live", launcher: report.runtime?.launcher ?? null, url: report.runtime?.url ?? null,
+  version: report.runtime?.version ?? null, managed: report.serviceOwnership === "managed"}. planRestart reads it;
+  the post-restart proof polls it every 500 ms for up to 20 s and requires live && version === latest.
+- A6 (channel in notices): updateNoticeLine also requires `cache.tag === defaultTag(current)`; tests cover
+  stable-with-preview-cache and preview-with-latest-cache suppression.
+- A8 (help): runUpdate returns 0 after printing usage for `-h`/`--help` before any check, cache access or
+  notice. updateNoticeLine and the updated-notice claim are suppressed when args contain -h, --help, -v or
+  --version. tests/update-cli.test.ts asserts `ima2 update --help` touches no cache (temp IMA2_CONFIG_DIR stays
+  empty); tests/cli-help-safety-contract.test.ts gains "update" if it enumerates help-owning commands.
+
 ## Scope
 
 IN: bin/lib/npmUpdate.ts (NEW), bin/lib/updateNotice.ts (NEW), bin/commands/update.ts (NEW);
@@ -129,4 +156,3 @@ exit 1; restart failure exit 1 with message; foreground hint.
 - R8 (JSON): with --json every subprocess runs with inherit:false (output captured), no human line is
   printed, confirmation requires --yes, and exactly one JSON document goes to stdout:
   `{current, latest, tag, available, updated, restart: {kind, ok, version} | null, error?}`.
-

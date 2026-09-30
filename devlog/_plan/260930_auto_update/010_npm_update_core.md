@@ -1,5 +1,17 @@
 # 010 npm update core — lib + routes + server (wp2 task t1)
 
+
+## Amendments after audit round 1 (override R1 where they differ)
+
+- A5 (lock, replaces the R1 fallback): the lock directory `<path>.lock/` holds `owner.json`
+  {pid, at}. Acquisition retries every 25 ms for up to 1 s. A lock is stale only when `at` is older
+  than 10 s AND `process.kill(pid, 0)` throws ESRCH; a stale lock is removed once and acquisition
+  retried. Failing to acquire never writes unlocked: updateVersionCache returns the unchanged cache
+  and logs "[update] cache busy, skipped write"; claimUpdatedNotice returns null (the claim stays
+  available for the next start). Test: spawn 4 child processes (node --import tsx -e) that call
+  claimUpdatedNotice on one temp cache concurrently; exactly one prints the version. Plus unit
+  tests for stale-lock recovery (dead pid) and live-lock skip.
+
 ## Scope
 
 IN: lib/updateVersion.ts, lib/updateCache.ts, lib/updateCheck.ts (NEW); routes/update.ts (NEW);
@@ -159,4 +171,3 @@ failing check; desktop ctx returns enabled:false and notice null without calling
 - R3 (coalescing): checkForUpdate keeps a module-level `Map<UpdateTag, Promise<VersionCache>>` of
   in-flight checks, so the scheduler, POST /api/update/check and the CLI (same process) share one
   registry request per tag. The scheduler's checkNow calls checkForUpdate and inherits this.
-
