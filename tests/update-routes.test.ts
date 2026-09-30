@@ -38,7 +38,7 @@ describe("update routes on an ephemeral local server", () => {
     updateVersionCache({ latest_version: "3.26.0", last_checked_at: 999, tag: "latest" }, api.path);
     const response = await api.get();
     assert.equal(response.status, 200);
-    assert.deepEqual(await response.json(), { surface: "npm", enabled: true, currentVersion: "3.25.0", latestVersion: "3.26.0", available: true, dismissed: false, stale: false, checkedAt: 999, tag: "latest", command: "ima2 update", releaseUrl: "https://github.com/lidge-ai/ima2-gen/releases/tag/v3.26.0" });
+    assert.deepEqual(await response.json(), { surface: "npm", enabled: true, currentVersion: "3.25.0", latestVersion: "3.26.0", available: true, dismissed: false, stale: false, checkedAt: 999, tag: "latest", command: "ima2 update", releaseUrl: "https://github.com/lidge-ai/ima2-gen/releases/tag/v3.26.0", noticePending: false });
   });
 
   it("rejects malformed dismiss versions, then writes a valid dismissal", async (t) => {

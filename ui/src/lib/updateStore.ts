@@ -1,6 +1,6 @@
 import { desktopBridge } from "./desktopShell";
 import {
-  BADGE_POLL_MS, claimServerNotice, dismissUpdate, fetchUpdateBadge, viewFromBadge, viewFromDesktop,
+  BADGE_POLL_MS, UPDATE_FIRST_FETCH_MS, claimServerNotice, dismissUpdate, fetchUpdateBadge, viewFromBadge, viewFromDesktop,
   type UpdateView,
 } from "./updateStatus";
 
@@ -10,6 +10,8 @@ let view: UpdateView = hidden;
 let stop: (() => void) | null = null;
 let dismissedVersion: string | null = null;
 let noticeClaim: Promise<string | null> | null = null;
+let noticePending = false;
+let releaseNoticeWait: (() => void) | null = null;
 
 function publish(next: UpdateView): void {
   view = next.kind === "npm" && next.version === dismissedVersion ? hidden : next;
@@ -35,17 +37,31 @@ function startBrowser(): () => void {
   let alive = true;
   let fetching = false;
   const poll = async () => {
-    if (fetching) return;
+    if (!alive || fetching) return;
     fetching = true;
     try {
       const badge = await fetchUpdateBadge();
-      if (alive) publish(viewFromBadge(badge));
+      if (alive) {
+        publish(viewFromBadge(badge));
+        if (badge.noticePending === true) {
+          noticePending = true;
+          releaseNoticeWait?.();
+          releaseNoticeWait = null;
+        }
+      }
     } catch { /* Offline and LAN authentication failures keep the last view. */ }
     finally { fetching = false; }
   };
-  void poll();
-  const timer = setInterval(() => { void poll(); }, BADGE_POLL_MS);
-  return () => { alive = false; clearInterval(timer); };
+  let interval: ReturnType<typeof setInterval> | null = null;
+  const timeout = setTimeout(() => {
+    void poll();
+    interval = setInterval(() => { void poll(); }, BADGE_POLL_MS);
+  }, UPDATE_FIRST_FETCH_MS);
+  return () => {
+    alive = false;
+    clearTimeout(timeout);
+    if (interval !== null) clearInterval(interval);
+  };
 }
 
 export function subscribe(listener: () => void): () => void {
@@ -87,7 +103,9 @@ export function claimUpdateNotice(): Promise<string | null> {
   noticeClaim ??= (async () => {
     try {
       const bridge = desktopBridge();
-      return bridge?.getUpdateState ? await bridge.claimUpdateNotice?.() ?? null : await claimServerNotice();
+      if (bridge?.getUpdateState) return await bridge.claimUpdateNotice?.() ?? null;
+      if (!noticePending) await new Promise<void>((resolve) => { releaseNoticeWait = resolve; });
+      return await claimServerNotice();
     } catch { return null; /* A LAN 401 or unavailable bridge must not disrupt the UI. */ }
   })();
   return noticeClaim;

@@ -918,7 +918,7 @@ npm installs check the registry for a newer ima2 while the server runs (at most 
 
 | Method | Path | Result |
 |---|---|---|
-| `GET` | `/api/update/badge` | `{ surface, enabled, currentVersion, latestVersion, available, dismissed, stale, checkedAt, tag, command, releaseUrl }` from the cache, no network |
+| `GET` | `/api/update/badge` | `{ surface, enabled, currentVersion, latestVersion, available, dismissed, stale, checkedAt, tag, command, releaseUrl, noticePending }` from the cache, no network. The web UI first reads it 90 s after the page opens, then every 10 minutes, and claims the notice only when `noticePending` |
 | `POST` | `/api/update/check` | Forced registry check, then the badge; `503 UPDATE_CHECK_FAILED` with `{ message, badge }` on failure |
 | `POST` | `/api/update/dismiss` | Body `{ version }`; hides that version's badge; `400 INVALID_VERSION` |
 | `POST` | `/api/update/notice` | `{ updatedTo: string \| null }` — the one-time "updated to vX" claim (null on first run, downgrade or repeat) |

@@ -109,6 +109,8 @@ export interface UpdateBadge {
   tag: UpdateTag;
   command: string;
   releaseUrl: string | null;
+  /** An npm install moved past the highest version the user was already told about. */
+  noticePending: boolean;
 }
 
 export function buildBadge(input: {
@@ -126,5 +128,6 @@ export function buildBadge(input: {
     checkedAt: cache.last_checked_at, tag,
     command: tag === "preview" ? "ima2 update --tag preview" : "ima2 update",
     releaseUrl: latest !== null ? releaseUrl(latest) : null,
+    noticePending: surface === "npm" && cache.last_seen_version !== null && compareVersions(current, cache.last_seen_version) > 0,
   };
 }

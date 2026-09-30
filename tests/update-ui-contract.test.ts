@@ -2,14 +2,14 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 import {
-  BADGE_POLL_MS, claimServerNotice, dismissUpdate, fetchUpdateBadge, viewFromBadge, viewFromDesktop,
+  BADGE_POLL_MS, UPDATE_FIRST_FETCH_MS, claimServerNotice, dismissUpdate, fetchUpdateBadge, viewFromBadge, viewFromDesktop,
   type DesktopUpdateState, type UpdateBadge,
 } from "../ui/src/lib/updateStatus.ts";
 import type { DesktopBridge } from "../ui/src/lib/desktopShell.ts";
 
 const badge: UpdateBadge = {
   surface: "npm", enabled: true, currentVersion: "3.25.0", latestVersion: "3.26.0",
-  available: true, dismissed: false, stale: false, checkedAt: 100, tag: "latest",
+  available: true, dismissed: false, noticePending: false, stale: false, checkedAt: 100, tag: "latest",
   command: "ima2 update", releaseUrl: "https://github.com/lidge-ai/ima2-gen/releases/tag/v3.26.0",
 };
 const desktop: DesktopUpdateState = {
@@ -85,7 +85,9 @@ describe("update transport and singleton", () => {
   });
   it("shares one browser poll, keeps the last view on failure and stops after the last subscriber", async (context) => {
     context.after(setBridge(undefined));
-    context.mock.timers.enable({ apis: ["setInterval"] });
+    context.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+    const clearFirst = context.mock.method(globalThis, "clearTimeout");
+    const clearPoll = context.mock.method(globalThis, "clearInterval");
     let requests = 0;
     let fails = false;
     context.mock.method(globalThis, "fetch", () => {
@@ -97,18 +99,32 @@ describe("update transport and singleton", () => {
     const second = store.subscribe(() => {});
     context.after(() => { first(); second(); });
     await drain();
+    assert.equal(requests, 0);
+    assert.deepEqual(store.getSnapshot(), hidden);
+    context.mock.timers.tick(UPDATE_FIRST_FETCH_MS - 1);
+    await drain();
+    assert.equal(requests, 0);
+    context.mock.timers.tick(1);
+    await drain();
     assert.equal(requests, 1);
     assert.deepEqual(store.getSnapshot(), viewFromBadge(badge));
     fails = true;
-    context.mock.timers.tick(BADGE_POLL_MS);
+    context.mock.timers.tick(BADGE_POLL_MS - 1);
+    await drain();
+    assert.equal(requests, 1);
+    context.mock.timers.tick(1);
     await drain();
     assert.equal(requests, 2);
     assert.deepEqual(store.getSnapshot(), viewFromBadge(badge));
     first();
+    assert.equal(clearFirst.mock.callCount(), 0);
+    assert.equal(clearPoll.mock.callCount(), 0);
     context.mock.timers.tick(BADGE_POLL_MS);
     await drain();
     assert.equal(requests, 3);
     second();
+    assert.equal(clearFirst.mock.callCount(), 1);
+    assert.equal(clearPoll.mock.callCount(), 1);
     context.mock.timers.tick(BADGE_POLL_MS);
     await drain();
     assert.equal(requests, 3);
@@ -154,11 +170,12 @@ describe("update transport and singleton", () => {
   });
   it("hides a successful dismissal and prevents a stale poll from reviving it", async (context) => {
     context.after(setBridge(undefined));
-    context.mock.timers.enable({ apis: ["setInterval"] });
+    context.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
     context.mock.method(globalThis, "fetch", () => Promise.resolve(Response.json(badge)));
     const store = await freshStore();
     const unsubscribe = store.subscribe(() => {});
     context.after(unsubscribe);
+    context.mock.timers.tick(UPDATE_FIRST_FETCH_MS);
     await drain();
     await store.dismiss();
     assert.deepEqual(store.getSnapshot(), hidden);
@@ -168,7 +185,7 @@ describe("update transport and singleton", () => {
   });
   it("keeps a newer badge visible when an earlier dismissal resolves", async (context) => {
     context.after(setBridge(undefined));
-    context.mock.timers.enable({ apis: ["setInterval"] });
+    context.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
     let latest = badge;
     let finishDismiss: (response: Response) => void = () => {};
     context.mock.method(globalThis, "fetch", (url: string) => url.endsWith("dismiss")
@@ -176,6 +193,7 @@ describe("update transport and singleton", () => {
     const store = await freshStore();
     const unsubscribe = store.subscribe(() => {});
     context.after(unsubscribe);
+    context.mock.timers.tick(UPDATE_FIRST_FETCH_MS);
     await drain();
     const pending = store.dismiss();
     latest = { ...badge, latestVersion: "3.27.0" };
@@ -187,24 +205,132 @@ describe("update transport and singleton", () => {
   });
   it("ignores a response from a stopped browser poller", async (context) => {
     context.after(setBridge(undefined));
+    context.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
     let finish: (response: Response) => void = () => {};
     context.mock.method(globalThis, "fetch", () => new Promise<Response>((resolve) => { finish = resolve; }));
     const store = await freshStore();
     const unsubscribe = store.subscribe(() => {});
+    context.mock.timers.tick(UPDATE_FIRST_FETCH_MS);
     unsubscribe();
     finish(Response.json(badge));
     await drain();
     assert.deepEqual(store.getSnapshot(), hidden);
   });
-  it("coalesces browser notice claims and returns null on a LAN 401", async (context) => {
+  it("stops the first timeout before any browser request", async (context) => {
     context.after(setBridge(undefined));
-    const http = context.mock.method(globalThis, "fetch", () => Promise.resolve(Response.json({ updatedTo: "3.26.0" })));
+    context.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+    const clearFirst = context.mock.method(globalThis, "clearTimeout");
+    const http = context.mock.method(globalThis, "fetch", () => Promise.resolve(Response.json(badge)));
     const store = await freshStore();
-    assert.deepEqual(await Promise.all([store.claimUpdateNotice(), store.claimUpdateNotice()]), ["3.26.0", "3.26.0"]);
+    const unsubscribe = store.subscribe(() => {});
+    unsubscribe();
+    assert.equal(clearFirst.mock.callCount(), 1);
+    context.mock.timers.tick(UPDATE_FIRST_FETCH_MS + BADGE_POLL_MS);
+    await drain();
+    assert.equal(http.mock.callCount(), 0);
+    assert.deepEqual(store.getSnapshot(), hidden);
+  });
+  it("waits for a pending badge and coalesces browser notice claims once per page", async (context) => {
+    context.after(setBridge(undefined));
+    context.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+    let latest = badge;
+    const calls: { url: string; method?: string }[] = [];
+    context.mock.method(globalThis, "fetch", (url: string, init?: RequestInit) => {
+      calls.push({ url, method: init?.method });
+      return Promise.resolve(Response.json(url.endsWith("notice") ? { updatedTo: "3.26.0" } : latest));
+    });
+    const store = await freshStore();
+    const unsubscribe = store.subscribe(() => {});
+    context.after(unsubscribe);
+    const first = store.claimUpdateNotice(), second = store.claimUpdateNotice();
+    assert.equal(first, second);
+    let resolved = false;
+    void first.then(() => { resolved = true; });
+    await drain();
+    assert.deepEqual(calls, []);
+    assert.equal(resolved, false);
+    context.mock.timers.tick(UPDATE_FIRST_FETCH_MS);
+    await drain();
+    assert.deepEqual(calls, [{ url: "/api/update/badge", method: undefined }]);
+    assert.equal(resolved, false);
+    latest = { ...badge, noticePending: true };
+    context.mock.timers.tick(BADGE_POLL_MS);
+    await drain();
+    assert.deepEqual(await Promise.all([first, second]), ["3.26.0", "3.26.0"]);
+    assert.deepEqual(calls, [
+      { url: "/api/update/badge", method: undefined },
+      { url: "/api/update/badge", method: undefined },
+      { url: "/api/update/notice", method: "POST" },
+    ]);
+    context.mock.timers.tick(BADGE_POLL_MS);
+    await drain();
+    assert.equal(await store.claimUpdateNotice(), "3.26.0");
+    assert.equal(calls.filter((call) => call.url.endsWith("notice")).length, 1);
+  });
+  it("claims immediately when a poll already observed a pending notice", async (context) => {
+    context.after(setBridge(undefined));
+    context.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+    const http = context.mock.method(globalThis, "fetch", (url: string) => Promise.resolve(Response.json(
+      url.endsWith("notice") ? { updatedTo: "3.26.0" } : { ...badge, noticePending: true },
+    )));
+    const store = await freshStore();
+    const unsubscribe = store.subscribe(() => {});
+    context.after(unsubscribe);
+    context.mock.timers.tick(UPDATE_FIRST_FETCH_MS);
+    await drain();
     assert.equal(http.mock.callCount(), 1);
-    context.mock.method(globalThis, "fetch", () => Promise.resolve(Response.json({ error: "LAN auth" }, { status: 401 })));
-    const lockedStore = await freshStore();
-    assert.equal(await lockedStore.claimUpdateNotice(), null);
+    const claim = store.claimUpdateNotice();
+    assert.equal(http.mock.callCount(), 2);
+    assert.equal(await claim, "3.26.0");
+    assert.equal(await store.claimUpdateNotice(), "3.26.0");
+    assert.equal(http.mock.callCount(), 2);
+  });
+  it("never claims a notice from an older badge without noticePending", async (context) => {
+    context.after(setBridge(undefined));
+    context.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+    const legacyBadge: Partial<UpdateBadge> = { ...badge };
+    delete legacyBadge.noticePending;
+    const http = context.mock.method(globalThis, "fetch", () => Promise.resolve(Response.json(legacyBadge)));
+    const store = await freshStore();
+    const unsubscribe = store.subscribe(() => {});
+    context.after(unsubscribe);
+    let resolved = false;
+    void store.claimUpdateNotice().then(() => { resolved = true; });
+    await drain();
+    assert.equal(http.mock.callCount(), 0);
+    for (const tick of [UPDATE_FIRST_FETCH_MS, BADGE_POLL_MS, BADGE_POLL_MS]) {
+      context.mock.timers.tick(tick);
+      await drain();
+    }
+    assert.equal(http.mock.callCount(), 3);
+    assert.ok(http.mock.calls.every((call) => call.arguments[0] === "/api/update/badge"));
+    assert.equal(resolved, false);
+    assert.deepEqual(store.getSnapshot(), viewFromBadge(badge));
+  });
+  it("returns null on a notice LAN 401 without retrying the claim", async (context) => {
+    context.after(setBridge(undefined));
+    context.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+    let posts = 0;
+    context.mock.method(globalThis, "fetch", (url: string) => {
+      if (url.endsWith("notice")) {
+        posts++;
+        return Promise.resolve(Response.json({ error: "LAN auth" }, { status: 401 }));
+      }
+      return Promise.resolve(Response.json({ ...badge, noticePending: true }));
+    });
+    const store = await freshStore();
+    const unsubscribe = store.subscribe(() => {});
+    context.after(unsubscribe);
+    const first = store.claimUpdateNotice(), second = store.claimUpdateNotice();
+    await drain();
+    assert.equal(posts, 0);
+    context.mock.timers.tick(UPDATE_FIRST_FETCH_MS);
+    await drain();
+    assert.deepEqual(await Promise.all([first, second]), [null, null]);
+    context.mock.timers.tick(BADGE_POLL_MS);
+    await drain();
+    assert.equal(await store.claimUpdateNotice(), null);
+    assert.equal(posts, 1);
   });
 });
 

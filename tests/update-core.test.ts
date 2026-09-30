@@ -193,7 +193,7 @@ describe("badge and freshness", () => {
   it("exposes availability, dismissal, staleness, channel and desktop state", () => {
     const cache = { ...emptyCache, latest_version: "3.26.0", last_checked_at: 100, tag: "latest" as const };
     const input = { cache, current: "3.25.0", tag: "latest" as const, enabled: true, surface: "npm" as const, now: 101 };
-    assert.deepEqual(buildBadge(input), { surface: "npm", enabled: true, currentVersion: "3.25.0", latestVersion: "3.26.0", available: true, dismissed: false, stale: false, checkedAt: 100, tag: "latest", command: "ima2 update", releaseUrl: "https://github.com/lidge-ai/ima2-gen/releases/tag/v3.26.0" });
+    assert.deepEqual(buildBadge(input), { surface: "npm", enabled: true, currentVersion: "3.25.0", latestVersion: "3.26.0", available: true, dismissed: false, stale: false, checkedAt: 100, tag: "latest", command: "ima2 update", releaseUrl: "https://github.com/lidge-ai/ima2-gen/releases/tag/v3.26.0", noticePending: false });
     const dismissed = buildBadge({ ...input, cache: { ...cache, dismissed_version: "3.26.0" } });
     assert.equal(dismissed.dismissed, true);
     assert.equal(dismissed.available, false);
@@ -209,6 +209,14 @@ describe("badge and freshness", () => {
     assert.equal(desktop.enabled, false);
     assert.equal(buildBadge({ ...input, current: "3.26.0" }).available, false);
     assert.equal(buildBadge({ ...input, cache: emptyCache }).releaseUrl, null);
+  });
+  it("reports a pending 'updated to' notice only past the highest version already announced", () => {
+    const input = { cache: emptyCache, current: "3.26.0", tag: "latest" as const, enabled: true, surface: "npm" as const, now: 1 };
+    assert.equal(buildBadge(input).noticePending, false); // first run: nothing to announce
+    assert.equal(buildBadge({ ...input, cache: { ...emptyCache, last_seen_version: "3.25.0" } }).noticePending, true);
+    assert.equal(buildBadge({ ...input, cache: { ...emptyCache, last_seen_version: "3.26.0" } }).noticePending, false);
+    assert.equal(buildBadge({ ...input, cache: { ...emptyCache, last_seen_version: "3.27.0" } }).noticePending, false);
+    assert.equal(buildBadge({ ...input, surface: "desktop", cache: { ...emptyCache, last_seen_version: "3.25.0" } }).noticePending, false);
   });
 
   it("uses successful check timestamps and respects opt-out only for automatic checks", () => {
