@@ -912,6 +912,17 @@ The studio's one-time star prompt stars the repository with the user's own `gh` 
 | `POST` | `/api/github/star` | Stars via `gh api -X PUT /user/starred/lidge-ai/ima2-gen` and marks prompted; `409 GH_UNAUTHENTICATED`, `502 GH_FAILED` |
 | `POST` | `/api/github/star/dismiss` | Marks prompted without starring |
 
+## Updates
+
+npm installs check the registry for a newer ima2 while the server runs (at most once every 20 hours, hourly retries with backoff; preview installs follow the `preview` tag). State lives under the config dir: `version.json` (check results), `update-dismissed.json` and `update-seen/<version>` markers. Servers launched by the desktop app report `surface: "desktop"`, never check npm and never claim notices; the app updates itself. `IMA2_DISABLE_UPDATE_CHECK=1` stops the automatic check only.
+
+| Method | Path | Result |
+|---|---|---|
+| `GET` | `/api/update/badge` | `{ surface, enabled, currentVersion, latestVersion, available, dismissed, stale, checkedAt, tag, command, releaseUrl }` from the cache, no network |
+| `POST` | `/api/update/check` | Forced registry check, then the badge; `503 UPDATE_CHECK_FAILED` with `{ message, badge }` on failure |
+| `POST` | `/api/update/dismiss` | Body `{ version }`; hides that version's badge; `400 INVALID_VERSION` |
+| `POST` | `/api/update/notice` | `{ updatedTo: string \| null }` — the one-time "updated to vX" claim (null on first run, downgrade or repeat) |
+
 
 ## Common Error Codes
 
@@ -1069,6 +1080,8 @@ Most server routes under `/api/*` have a CLI wrapper. The exception is **Agent M
 | `POST /api/auth/switch` / `GET /api/auth/switch/:sessionId` | Web UI (Settings > QuotaCard > Switch Account) and `ima2 grok login` |
 | `POST /api/oauth/restart` | `ima2 login`, `ima2 gpt login`, `ima2 gpt logout` |
 | `GET /api/health` | `ima2 ping` |
+| `GET /api/update/badge` / `POST /api/update/check` | `ima2 update --check` (the CLI checks the registry itself and shares the cache) |
+| `POST /api/update/dismiss` / `POST /api/update/notice` | Web UI only (update popover and the one-time toast) |
 | `GET /api/capabilities` | `ima2 capabilities` |
 | `GET /api/config/grok-planner` | — (Grok planner model query) |
 | `PATCH /api/config/grok-planner` | — (Grok planner model update) |

@@ -16,7 +16,7 @@ const emptyCache = { latest_version: null, last_checked_at: null, tag: null, dis
 
 function tempCache(t: TestContext): string {
   const dir = mkdtempSync(join(tmpdir(), "ima2-update-core-"));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  t.after(() => rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
   return versionCachePath(dir);
 }
 

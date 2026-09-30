@@ -10,7 +10,7 @@ import type { VersionCache } from "../lib/updateCache.js";
 
 const root = mkdtempSync(join(tmpdir(), "ima2-update-tests-"));
 process.env.IMA2_CONFIG_DIR = root;
-after(() => rmSync(root, { recursive: true, force: true }));
+after(() => rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
 const { classifyInstall, defaultExec, globalRoot, installGlobal, npmInvocation, planRestart,
   readInstalledVersion, runNewCli, runtimeSnapshot, serviceArtifactPath, serviceOwned } = await import("../bin/lib/npmUpdate.js");
 const { runUpdate } = await import("../bin/commands/update.js");

@@ -11,7 +11,7 @@ import { registerUpdateRoutes, type UpdateRouteDeps } from "../routes/update.js"
 
 async function fixture(t: TestContext, ctx: RouteRuntimeContext = {}, deps: UpdateRouteDeps = {}) {
   const dir = mkdtempSync(join(tmpdir(), "ima2-update-routes-"));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  t.after(() => rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
   const path = versionCachePath(dir);
   const app = express();
   app.use(express.json());

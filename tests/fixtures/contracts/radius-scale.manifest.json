@@ -3365,5 +3365,40 @@
     "selector": ".sidebar-top__btn",
     "expected": "var(--r-md)",
     "important": false
+  },
+  {
+    "file": "ui/src/styles/update-indicator.css",
+    "atRule": null,
+    "selector": ".update-indicator__dot",
+    "expected": "var(--r-pill)",
+    "important": false
+  },
+  {
+    "file": "ui/src/styles/update-indicator.css",
+    "atRule": null,
+    "selector": ".update-indicator--floating",
+    "expected": "var(--r-pill)",
+    "important": false
+  },
+  {
+    "file": "ui/src/styles/update-indicator.css",
+    "atRule": null,
+    "selector": ".update-popover",
+    "expected": "var(--r-md)",
+    "important": false
+  },
+  {
+    "file": "ui/src/styles/update-indicator.css",
+    "atRule": null,
+    "selector": ".update-popover code",
+    "expected": "var(--r-sm)",
+    "important": false
+  },
+  {
+    "file": "ui/src/styles/update-indicator.css",
+    "atRule": null,
+    "selector": ".update-popover__actions button,\n.update-popover__actions a",
+    "expected": "var(--r-sm)",
+    "important": false
   }
 ]

@@ -113,7 +113,7 @@ describe("CLI help safety", () => {
       assert.match(result.stdout, /Usage: ima2 update/);
       assert.deepEqual(await readdir(root), []);
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
   it("backfill-thumbs --help leaves generated files unchanged", async () => {

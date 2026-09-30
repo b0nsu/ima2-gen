@@ -159,7 +159,7 @@ it("generates update templates with opaque black dots and a transparent clearanc
       assert.ok(data.some((value, i) => i % 4 === 3 && value === 255 && Math.floor(i / 4) % size < cx - r - 2), `${name}: glyph preserved`);
     }
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
