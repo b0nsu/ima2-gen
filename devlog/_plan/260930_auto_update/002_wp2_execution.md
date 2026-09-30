@@ -23,7 +23,7 @@ README, structure/, skills/ima2/SKILL.md, and full gates.
 `npm run typecheck`, `npm run typecheck:tests`, `npm run lint`, `node scripts/classify-tests.mjs` then
 `npm run test:inventory`, focused `node --experimental-test-module-mocks --import tsx --test tests/update-*.test.ts
 tests/desktop-update*.test.ts tests/desktop-tray.test.ts tests/cli-help-safety-contract.test.ts`, full `npm test`,
-`cd ui && npm run build`, a CLI smoke (`node bin/ima2.js update --help`, `update --check` against the live registry with a
+`cd ui && npm run build`, then `npm run build:server` and `npm run build:cli` (both must exit 0: the typechecks are
+--noEmit, so emitted JS exists only after these), then a CLI smoke (`node bin/ima2.js update --help`, `update --check` against the live registry with a
 temp IMA2_CONFIG_DIR), a server smoke (`GET /api/update/badge` on a temp-config server) and the UI screenshot with a
 seeded version.json.
-
