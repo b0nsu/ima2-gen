@@ -48,8 +48,13 @@ export function isCacheFresh(cache: VersionCache, tag: UpdateTag, now: number, m
   return cache.tag === tag && cache.last_checked_at !== null && now - cache.last_checked_at < maxAgeMs;
 }
 
+/**
+ * Automatic checks run only for real npm-launched servers: never for the desktop's bundled
+ * server (the app updates itself) and never under node --test, whose NODE_TEST_CONTEXT is
+ * inherited by servers that tests start, so suites stay offline and away from ~/.ima2.
+ */
 export function updateChecksEnabled(env: NodeJS.ProcessEnv, launcher: string): boolean {
-  return env.IMA2_DISABLE_UPDATE_CHECK !== "1" && launcher !== "desktop";
+  return env.IMA2_DISABLE_UPDATE_CHECK !== "1" && launcher !== "desktop" && !env.NODE_TEST_CONTEXT;
 }
 
 export interface SchedulerOptions {

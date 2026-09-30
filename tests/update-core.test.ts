@@ -222,6 +222,7 @@ describe("badge and freshness", () => {
     assert.equal(updateChecksEnabled({ IMA2_DISABLE_UPDATE_CHECK: "1" }, "service"), false);
     assert.equal(updateChecksEnabled({ IMA2_DISABLE_UPDATE_CHECK: "0" }, "background"), true);
     assert.equal(updateChecksEnabled({}, "desktop"), false);
+    assert.equal(updateChecksEnabled({ NODE_TEST_CONTEXT: "child" }, "foreground"), false);
   });
 });
 
