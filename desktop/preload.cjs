@@ -1,20 +1,32 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
+const updateBridge = {
+  getUpdateState: () => ipcRenderer.invoke("desktop:update:get"),
+  checkForUpdates: () => ipcRenderer.invoke("desktop:check-updates"),
+  downloadUpdate: () => ipcRenderer.invoke("desktop:update:download"),
+  installUpdate: () => ipcRenderer.invoke("desktop:update:install"),
+  claimUpdateNotice: () => ipcRenderer.invoke("desktop:update:claim-notice"),
+  onUpdateState: (cb) => {
+    const handler = (_e, state) => cb(state);
+    ipcRenderer.on("desktop:update:state", handler);
+    return () => ipcRenderer.removeListener("desktop:update:state", handler);
+  },
+};
+
 // The full bridge is only for the bundled desktop pages (loading/settings).
 // The served ima2 UI (http://127.0.0.1:<port>) runs in the same window and gets
-// a minimal bridge — enough to know it is inside the desktop shell (the sidebar
-// top strip reads platform for the traffic-light inset) and to reopen the
-// settings window — but not to touch settings, the server process, or the disk.
+// an update bridge plus platform and the settings-window action. Settings,
+// server controls and disk actions remain exclusive to bundled file: pages.
 if (window.location.protocol === "file:") {
   contextBridge.exposeInMainWorld("ima2Desktop", {
     platform: process.platform,
+    ...updateBridge,
     getStatus: () => ipcRenderer.invoke("desktop:status"),
     getSettings: () => ipcRenderer.invoke("desktop:settings:get"),
     saveSettings: (patch) => ipcRenderer.invoke("desktop:settings:save", patch),
     getInfo: () => ipcRenderer.invoke("desktop:info"),
     restartServer: () => ipcRenderer.invoke("desktop:server:restart"),
     useBundledServer: () => ipcRenderer.invoke("desktop:server:use-bundled"),
-    checkForUpdates: () => ipcRenderer.invoke("desktop:check-updates"),
     openApp: () => ipcRenderer.invoke("desktop:open-app"),
     openSettings: () => ipcRenderer.invoke("desktop:open-settings"),
     openGenerated: () => ipcRenderer.invoke("desktop:open-generated"),
@@ -40,6 +52,7 @@ if (window.location.protocol === "file:") {
 } else {
   contextBridge.exposeInMainWorld("ima2Desktop", {
     platform: process.platform,
+    ...updateBridge,
     openSettings: () => ipcRenderer.invoke("desktop:open-settings"),
   });
 }

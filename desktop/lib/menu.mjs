@@ -1,4 +1,5 @@
 import { Menu, app, webContents } from "electron";
+import { trayUpdateItem } from "./update-state.mjs";
 import { editMenu } from "./edit-menu.mjs";
 
 const isMac = process.platform === "darwin";
@@ -31,13 +32,23 @@ function viewMenu() {
   };
 }
 
-function appMenu(actions) {
+function updateItems(actions, updateState) {
+  const item = trayUpdateItem(updateState);
+  const actionMap = {
+    check: () => actions.checkForUpdates(),
+    download: () => actions.downloadUpdate(),
+    install: () => actions.installUpdate({ confirm: false }),
+  };
+  return item ? [{ label: item.label, enabled: item.enabled, click: actionMap[item.action] }] : [];
+}
+
+function appMenu(actions, updateState) {
   return {
     label: app.name,
     submenu: [
       { role: "about" },
       { type: "separator" },
-      { label: "Check for Updates…", enabled: actions.updaterActive, visible: Boolean(actions.updaterActive), click: () => actions.checkForUpdates() },
+      ...updateItems(actions, updateState),
       { type: "separator" },
       { label: "Settings…", accelerator: "Cmd+,", click: () => actions.openSettings() },
       { type: "separator" },
@@ -52,7 +63,7 @@ function appMenu(actions) {
   };
 }
 
-function serverMenu(actions) {
+function serverMenu(actions, updateState) {
   return {
     label: "Server",
     submenu: [
@@ -61,6 +72,7 @@ function serverMenu(actions) {
       { label: "Open Generated Folder", click: () => actions.openGenerated() },
       { type: "separator" },
       { label: "Restart Server", accelerator: "CmdOrCtrl+Alt+R", click: () => actions.restartServer() },
+      ...(isMac ? [] : updateItems(actions, updateState)),
       { label: "Open Server Log", click: () => actions.openLogs() },
       ...(isMac ? [] : [
         { type: "separator" },
@@ -72,10 +84,10 @@ function serverMenu(actions) {
   };
 }
 
-export function installApplicationMenu(actions) {
+export function installApplicationMenu(actions, updateState) {
   const template = [
-    ...(isMac ? [appMenu(actions)] : []),
-    serverMenu(actions),
+    ...(isMac ? [appMenu(actions, updateState)] : []),
+    serverMenu(actions, updateState),
     editMenu({ isMac, focused }),
     viewMenu(),
     { role: "windowMenu" },

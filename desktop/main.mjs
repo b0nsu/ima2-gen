@@ -1,4 +1,4 @@
-import { app, clipboard, dialog, Menu, shell } from "electron";
+import { app, clipboard, dialog, Menu, Notification, shell } from "electron";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -17,6 +17,7 @@ import { installPopupPolicy } from "./lib/window-open.mjs";
 import { registerIpc } from "./lib/ipc.mjs";
 import { wireAppLifecycle } from "./lib/app-lifecycle.mjs";
 import { createUpdaterController } from "./lib/updater.mjs";
+import { evaluateLaunchVersion, compareVersions } from "./lib/update-receipt.mjs";
 import { launchOrigin } from "./lib/launch-origin.mjs";
 import { askTakeover } from "./lib/takeover-prompt.mjs";
 
@@ -24,6 +25,8 @@ const desktopDir = dirname(fileURLToPath(import.meta.url));
 const rootDir = resolve(desktopDir, "..");
 const isMac = process.platform === "darwin";
 const buildDir = join(desktopDir, "build");
+const UPDATE_CHECK_MS = 6 * 60 * 60 * 1000;
+let updateCheckTimer = null;
 
 app.setName("ima2");
 if (process.platform === "win32") app.setAppUserModelId("com.lidge.ima2");
@@ -36,20 +39,49 @@ if (!app.requestSingleInstanceLock()) {
 
 async function boot() {
   await app.whenReady();
-
-  const { appIcon, trayIcon, trayUpdateIcon } = await resolveIconPaths({
-    buildDir,
-    fallbackDir: join(app.getPath("userData"), "icons"),
-    log: (line) => console.warn(line),
+  const icons = await resolveIconPaths({
+    buildDir, fallbackDir: join(app.getPath("userData"), "icons"), log: (line) => console.warn(line),
   });
-
   const settingsStore = createSettingsStore(app.getPath("userData"));
-  // Declared before the supervisor so its takeover prompt can find the window once it exists.
+  const settings0 = settingsStore.get();
+  const launch = evaluateLaunchVersion({ lastRunVersion: settings0.lastRunVersion, currentVersion: app.getVersion(), compare: compareVersions });
+  settingsStore.update({ lastRunVersion: launch.nextLastRunVersion });
+  const { supervisor, windows, popup } = createRuntime(settingsStore, icons);
+  const loginItem = createLoginItem({ app });
+  const lifecycle = wireAppLifecycle({ supervisor, windows, settingsStore, applyDockVisibility, app });
+  const updater = await createUpdaterController({
+    app, dialog, prepareForInstall: () => lifecycle.prepareForUpdateInstall(), autoDownload: settings0.autoUpdate,
+  });
+  if (launch.updatedTo) updater.markUpdated(launch.updatedTo);
+  const actions = createActions({ settingsStore, supervisor, windows, popup, updater });
+  const tray = new TrayController({ iconPath: icons.trayIcon, updateIconPath: icons.trayUpdateIcon, actions });
+  windows.onHiddenToTray = hiddenTrayNotifier(tray);
+  wireDesktop({ settingsStore, supervisor, windows, popup, updater, actions, tray, loginItem });
+  // One announcement per update: the app window's toast when it opens, the OS notification when
+  // the app starts hidden. Claiming here keeps the toast from repeating it; the tray keeps
+  // "What's New" either way.
+  if (launch.updatedTo && settingsStore.get().startHidden) {
+    updater.claimNotice();
+    showUpdatedNotification(launch.updatedTo, actions);
+  }
+  if (settings0.openAtLogin) applyLoginItem(loginItem, settingsStore.get());
+  applyDockVisibility(settingsStore.get(), windows);
+  if (!existsSync(join(rootDir, "server.js"))) {
+    dialog.showErrorBox("ima2 server build missing", `server.js not found in ${rootDir}.\nRun: npm run build:server && npm run ui:build`);
+  }
+  if (!settingsStore.get().startHidden) windows.showMain();
+  await supervisor.start(settingsStore.get());
+  if (settingsStore.get().autoUpdate) {
+    void updater.checkForUpdates();
+    startBackgroundChecks(updater);
+  }
+}
+
+function createRuntime(settingsStore, icons) {
   let windows;
+  const popup = new TrayPopup();
   const supervisor = new ServerSupervisor({
-    rootDir,
-    isPackaged: app.isPackaged,
-    logFile: join(app.getPath("logs"), "server.log"),
+    rootDir, isPackaged: app.isPackaged, logFile: join(app.getPath("logs"), "server.log"),
     origin: launchOrigin(process.argv, isMac ? app.getLoginItemSettings() : {}),
     askTakeover: async (status) => {
       const answer = await askTakeover({ dialog, status, parent: windows?.main ?? null });
@@ -58,62 +90,70 @@ async function boot() {
     },
   });
   windows = new WindowManager({
-    iconPath: appIcon,
-    getServerUrl: () => supervisor.url,
-    getSettings: () => settingsStore.get(),
+    iconPath: icons.appIcon, getServerUrl: () => supervisor.url, getSettings: () => settingsStore.get(),
     onVisibilityChange: () => {
       if (!windows.main && !windows.settings && !settingsStore.get().keepRunningOnClose) popup.release();
       applyDockVisibility(settingsStore.get(), windows);
     },
-    onHiddenToTray: () => notifyHiddenToTray(),
   });
-  let trayHintShown = false;
-  const notifyHiddenToTray = () => {
-    if (trayHintShown) return;
-    trayHintShown = true;
+  return { supervisor, windows, popup };
+}
+
+function hiddenTrayNotifier(tray) {
+  let shown = false;
+  return () => {
+    if (shown) return;
+    shown = true;
     tray.notifyStillRunning();
   };
-  const loginItem = createLoginItem({ app });
-  const popup = new TrayPopup();
-  const lifecycle = wireAppLifecycle({ supervisor, windows, settingsStore, applyDockVisibility, app });
-  const updater = await createUpdaterController({
-    app,
-    dialog,
-    prepareForInstall: () => lifecycle.prepareForUpdateInstall(),
-    autoDownload: settingsStore.get().autoUpdate,
-    onUpdateReady: () => tray.setUpdatePending(true),
-  });
+}
 
+function createActions({ settingsStore, supervisor, windows, popup, updater }) {
   const configDir = () => settingsStore.get().configDir || process.env.IMA2_CONFIG_DIR || join(homedir(), ".ima2");
-  const actions = {
+  return {
     openApp: () => { if (isMac) app.dock?.show(); windows.showMain(); },
     openInBrowser: () => { if (supervisor.url) void shell.openExternal(supervisor.url); },
     openGenerated: () => shell.openPath(join(configDir(), "generated")),
     openLogs: () => shell.openPath(supervisor.logFile),
     openSettings: () => windows.showSettings(),
     openUrl: (url) => shell.openExternal(url),
+    openReleaseNotes: (version) => shell.openExternal(`https://github.com/lidge-ai/ima2-gen/releases/tag/v${version}`),
     restartServer: () => supervisor.restart(settingsStore.get()),
     useBundledServer: () => supervisor.useBundledServer(settingsStore.get()),
     checkForUpdates: () => updater.checkForUpdates({ manual: true }),
+    downloadUpdate: () => updater.downloadUpdate(),
+    installUpdate: (options) => updater.installUpdate(options),
+    updateState: () => updater.snapshot(),
+    claimUpdateNotice: () => updater.claimNotice(),
     updaterActive: updater.active,
-    configDir,
-    quit: () => app.quit(),
+    configDir, quit: () => app.quit(),
     toggleTrayPopup: (bounds) => popup.toggle(bounds),
     showTrayPopup: (bounds) => popup.show(bounds),
     hideTrayPopup: () => popup.hide(),
     traySnapshot: () => collectTraySnapshot({ status: supervisor.snapshot() }),
     setOpenAtLogin: (enabled) => settingsStore.update({ openAtLogin: enabled === true }),
   };
+}
 
-  const tray = new TrayController({ iconPath: trayIcon, updateIconPath: trayUpdateIcon, actions });
-  app.on("before-quit", () => popup.destroy());
+function wireDesktop({ settingsStore, supervisor, windows, popup, updater, actions, tray, loginItem }) {
+  app.on("before-quit", () => {
+    stopBackgroundChecks();
+    updater.dispose();
+    popup.destroy();
+  });
   tray.create();
   tray.update({ settings: settingsStore.get() });
-  installApplicationMenu(actions);
+  const pushUpdateState = (state) => {
+    tray.setUpdateState(state);
+    installApplicationMenu(actions, state);
+    windows.broadcast("desktop:update:state", state);
+    popup.win?.webContents.send("desktop:update:state", state);
+  };
+  updater.onState(pushUpdateState);
+  pushUpdateState(updater.snapshot());
   installContextMenus({ app, Menu, clipboard, dialog, shell });
   installPopupPolicy({ app, shell, getServerUrl: () => supervisor.url });
   registerIpc({ settingsStore, supervisor, actions, info: { rootDir, logFile: supervisor.logFile } });
-
   supervisor.on("status", (status) => {
     tray.update({ status });
     windows.broadcast("desktop:status", status);
@@ -121,22 +161,33 @@ async function boot() {
     windows.syncMainContent();
   });
   settingsStore.onChange((next, changed) => onSettingsChanged({ next, changed, supervisor, tray, windows, updater, loginItem }));
+}
 
-  if (settingsStore.get().openAtLogin) applyLoginItem(loginItem, settingsStore.get());
-  applyDockVisibility(settingsStore.get(), windows);
+function startBackgroundChecks(updater) {
+  if (updateCheckTimer || !updater.active) return;
+  updateCheckTimer = setInterval(() => void updater.checkForUpdates(), UPDATE_CHECK_MS);
+  updateCheckTimer.unref();
+}
 
-  if (!existsSync(join(rootDir, "server.js"))) {
-    dialog.showErrorBox("ima2 server build missing", `server.js not found in ${rootDir}.\nRun: npm run build:server && npm run ui:build`);
-  }
+function stopBackgroundChecks() {
+  clearInterval(updateCheckTimer);
+  updateCheckTimer = null;
+}
 
-  if (!settingsStore.get().startHidden) windows.showMain();
-  await supervisor.start(settingsStore.get());
-  if (settingsStore.get().autoUpdate) void updater.checkForUpdates();
+function showUpdatedNotification(version, actions) {
+  if (!Notification.isSupported()) return;
+  const notification = new Notification({ title: `ima2 updated to v${version}`, body: "See what's new" });
+  notification.on("click", () => actions.openReleaseNotes(version));
+  notification.show();
 }
 
 function onSettingsChanged({ next, changed, supervisor, tray, windows, updater, loginItem }) {
   tray.update({ settings: next });
-  if (changed.includes("autoUpdate")) updater.setAutoDownload(next.autoUpdate);
+  if (changed.includes("autoUpdate")) {
+    updater.setAutoDownload(next.autoUpdate);
+    if (next.autoUpdate) startBackgroundChecks(updater);
+    else stopBackgroundChecks();
+  }
   windows.broadcast("desktop:status", supervisor.snapshot());
   if (changed.includes("openAtLogin") || changed.includes("startHidden")) applyLoginItem(loginItem, next);
   if (changed.includes("menubarOnly")) applyDockVisibility(next, windows);

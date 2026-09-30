@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, existsSync } from "node:fs";
+import { mkdtempSync, readFileSync, existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -7,7 +7,12 @@ import { popupGeometry, trayAnchor, POPUP_WIDTH, POPUP_HEIGHT } from "../desktop
 import { createLoginItem, linuxAutostartEntry, linuxAutostartFile } from "../desktop/lib/login-item.mjs";
 import { collectTraySnapshot } from "../desktop/lib/tray-data.mjs";
 import { trayIconName } from "../desktop/lib/icons.mjs";
-import { encodeIco } from "../desktop/scripts/make-icons.mjs";
+import { runInNewContext } from "node:vm";
+import { describeLauncher } from "../desktop/lib/takeover-prompt.mjs";
+import { updatePending, trayUpdateItem, tooltipSuffix } from "../desktop/lib/update-state.mjs";
+import sharp from "sharp";
+import { initialUpdateState, reduceUpdateState } from "../desktop/lib/update-state.mjs";
+import { encodeIco, generateIcons } from "../desktop/scripts/make-icons.mjs";
 
 const fhd = { x: 0, y: 0, width: 1920, height: 1040 };
 
@@ -116,7 +121,8 @@ describe("platform tray icons", () => {
     assert.equal(trayIconName("win32"), "tray.ico");
     assert.equal(trayIconName("win32", { update: true }), "tray-update.ico");
     assert.equal(trayIconName("linux", { update: true }), "tray-update.png");
-    assert.equal(trayIconName("darwin", { update: true }), "trayTemplate.png");
+    assert.equal(trayIconName("darwin"), "trayTemplate.png");
+    assert.equal(trayIconName("darwin", { update: true }), "trayUpdateTemplate.png");
   });
 
   it("encodes a PNG-framed ICO directory", () => {
@@ -129,4 +135,79 @@ describe("platform tray icons", () => {
     assert.equal(ico.readUInt32LE(6 + 12), 6 + 32);
     assert.equal(ico.length, 6 + 32 + 6);
   });
+});
+
+
+it("generates update templates with opaque black dots and a transparent clearance ring", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ima2-update-icons-"));
+  try {
+    await generateIcons(dir);
+    for (const [name, size] of [["trayUpdateTemplate.png", 22], ["trayUpdateTemplate@2x.png", 44]] as const) {
+      const file = join(dir, name);
+      assert.equal(existsSync(file), true);
+      const { data, info } = await sharp(file).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+      assert.equal(info.width, size);
+      assert.equal(info.height, size);
+      const r = size === 22 ? 4 : 8;
+      const cx = size - r - 1;
+      const cy = r + 1;
+      const pixel = (x: number, y: number) => [...data.subarray((y * size + x) * 4, (y * size + x) * 4 + 4)];
+      assert.deepEqual(pixel(cx, cy), [0, 0, 0, 255]);
+      assert.equal(pixel(cx - r - 1, cy + (size === 22 ? 2 : 0))[3], 0, `${name}: transparent gap`);
+      // The 1px ring at 22px has antialiased edges; 44px has a fully clear interior.
+      assert.ok(pixel(cx - r - 1, cy)[3] <= 16, `${name}: clearing circle separates glyph from dot`);
+      assert.ok(data.some((value, i) => i % 4 === 3 && value === 255 && Math.floor(i / 4) % size < cx - r - 2), `${name}: glyph preserved`);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+class FakeTray {
+  images: unknown[] = [];
+  tooltip = "";
+  constructor(public image: unknown) {}
+  setToolTip(text: string) { this.tooltip = text; }
+  setContextMenu() {}
+  on() {}
+  setImage(image: unknown) { this.images.push(image); }
+}
+const { TrayController } = runInNewContext(
+  readFileSync("desktop/lib/tray.mjs", "utf8").replace(/^import .*;$/gm, "").replace("export class", "class") + "; ({ TrayController })",
+  {
+    process, describeLauncher, initialUpdateState, updatePending, trayUpdateItem, tooltipSuffix,
+    Tray: FakeTray, Menu: { buildFromTemplate: (template: unknown) => template },
+    nativeImage: { createFromPath: (path: string) => ({ path, template: false, setTemplateImage(value: boolean) { this.template = value; } }) },
+  },
+);
+
+it("swaps pending icons on every platform and keeps native actions and release notes after notice claim", () => {
+  for (const platform of ["darwin", "win32", "linux"]) {
+    const calls: unknown[] = [];
+    const actions = {
+      updaterActive: true, checkForUpdates: () => calls.push("check"), downloadUpdate: () => calls.push("download"),
+      installUpdate: (options: unknown) => calls.push(options), openReleaseNotes: (version: string) => calls.push(version),
+    };
+    const tray = new TrayController({ iconPath: "normal", updateIconPath: "update", actions, platform });
+    const native = tray.create() as FakeTray;
+    const state = initialUpdateState({ active: true, currentVersion: "3.16.1" });
+    tray.setUpdateState(state);
+    tray.updateMenuItems()[0].click();
+    const available = reduceUpdateState(state, { type: "available", version: "3.17.0" });
+    tray.setUpdateState(available);
+    tray.updateMenuItems()[0].click();
+    assert.equal(native.images.length, 1);
+    assert.equal((native.images[0] as { path: string }).path, "update");
+    assert.equal((native.images[0] as { template: boolean }).template, platform === "darwin");
+    assert.match(native.tooltip, /Update v3.17.0 available/);
+    tray.setUpdateState(reduceUpdateState(available, { type: "downloaded", version: "3.17.0" }));
+    assert.equal(native.images.length, 1);
+    assert.match(native.tooltip, /Update v3.17.0 ready/);
+    tray.updateMenuItems()[0].click();
+    tray.setUpdateState({ ...state, updatedTo: "3.17.0" });
+    tray.setUpdateState(state);
+    tray.updateMenuItems()[1].click();
+    assert.equal(JSON.stringify(calls), JSON.stringify(["check", "download", { confirm: false }, "3.17.0"]));
+    assert.equal(native.images.length, 2);
+  }
 });
