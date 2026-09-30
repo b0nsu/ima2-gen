@@ -203,6 +203,12 @@ After an update relaunch, `lastRunVersion` in the desktop settings yields one "i
 to vX" notification. Draft releases stay invisible to installed updaters until the approved
 publication above.
 
+The updater's GitHub provider reads `latest*.yml` from the release GitHub marks Latest, and that
+is the npm release `vX.Y.Z` (`release-contract.mjs` passes `--latest`; `desktop-v*` is published with
+`--latest=false`). `desktop.yml`'s `mirror_update_manifests` job therefore copies the desktop
+manifests into `vX.Y.Z` after publication, rewriting every file path to `../desktop-vX.Y.Z/<file>`;
+the provider resolves those with `new URL()` onto the desktop release assets.
+
 npm installs keep their own update state under the config dir: `version.json` (registry
 checks, 20 h freshness, hourly scheduler with backoff in the server, off for desktop-launched
 servers and with `IMA2_DISABLE_UPDATE_CHECK=1`), `update-dismissed.json` and
