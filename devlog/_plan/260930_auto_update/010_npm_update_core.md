@@ -171,3 +171,22 @@ failing check; desktop ctx returns enabled:false and notice null without calling
 - R3 (coalescing): checkForUpdate keeps a module-level `Map<UpdateTag, Promise<VersionCache>>` of
   in-flight checks, so the scheduler, POST /api/update/check and the CLI (same process) share one
   registry request per tag. The scheduler's checkNow calls checkForUpdate and inherits this.
+
+## Amendments after audit round 2 (override A5 where they differ)
+
+- A5b (lock file with identity-checked reclaim): the lock is a FILE `<path>.lock` created with
+  `openSync(lock, "wx", 0o600)`, which is atomic on every platform; the owner JSON {pid, at, token}
+  is written to that descriptor. Release: read the file, and unlink only when its token is ours.
+  Stale when either (a) the owner parses, is older than 10 s and `process.kill(pid, 0)` throws
+  ESRCH, or (b) the owner is missing or malformed and the file mtime is older than 10 s (covers a
+  crash between create and write). Reclaim is identity-checked: record the stale file's inode
+  (`statSync(lock).ino`), `renameSync(lock, lock + "." + token + ".stale")` (only one reclaimer's
+  rename can succeed on a given file), then stat the renamed file; when its inode differs from the
+  one observed, we moved someone's fresh lock, so put it back with `linkSync(renamed, lock)` (EEXIST
+  means yet another process holds a newer lock: leave it) and unlink the renamed path. Tests: dead
+  pid reclaimed; malformed/empty owner with old mtime reclaimed; young malformed owner kept; a
+  deterministic two-reaper interleaving (reaper B renames after reaper A reclaimed and re-acquired)
+  restores A's fresh lock; the 4-process claim test prints the version exactly once.
+- Residual (recorded, accepted): on filesystems without hard links (some network mounts) the restore
+  step falls back to leaving the fresh owner's lock renamed; its owner then finds its token missing
+  on release and logs it. The worst outcome is one duplicate "updated" toast, never a lost install.

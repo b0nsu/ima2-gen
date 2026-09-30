@@ -98,3 +98,9 @@ C captures the npm popover and the badge in a running dev UI (agbrowse) with a s
   MobileAppBar (`variant="mobile"`). A separate `UpdateNoticeHost` component, mounted
   unconditionally in App.tsx next to `<Toast />`, performs the one-time notice claim and toast, so the
   notice fires in every layout even when no indicator is mounted.
+
+## Amendments after audit round 2
+
+- A7b (scope correction): the final IN map also includes `ui/src/hooks/useUpdateStatus.ts` (NEW; the
+  hook reads ui/src/lib/updateStore.ts through useSyncExternalStore and exposes view, dismiss,
+  download, install) and `tests/update-ui-contract.test.ts` (NEW). Both remain required.
