@@ -247,6 +247,34 @@ describe("windows force-kill", () => {
     }
   });
 
+  it("keeps a child whose kill raised an error while stopping", { timeout: 1_000 }, async () => {
+    const h = harness([ABSENT], { killTreeFn: () => false, stopGraceMs: 20 });
+    try {
+      const c = await running(h);
+      c.kill = () => { c.emit("error", new Error("kill EPERM")); return false; };
+      await assert.rejects(h.sup.stop(), /server did not exit/);
+      assert.equal((h.sup as unknown as { child: Child | null }).child, c, "a live child is not dropped on a kill error");
+      assert.equal(h.sup.state, "error");
+    } finally {
+      await h.cleanup();
+    }
+  });
+
+  it("restart resolves without spawning when the old child will not exit", { timeout: 1_000 }, async () => {
+    const h = harness([ABSENT], { killTreeFn: () => false, stopGraceMs: 20 });
+    try {
+      const c = await running(h);
+      c.kill = () => false;
+      const spawned = h.children.length;
+      await h.sup.restart(SETTINGS);
+      assert.equal(h.children.length, spawned, "no second server next to the surviving one");
+      assert.equal(h.sup.state, "error");
+      assert.equal(h.sup.lastError, "server did not exit");
+    } finally {
+      await h.cleanup();
+    }
+  });
+
   it("shares the admin request and tree kill between concurrent stops", async (t) => {
     const killed: number[] = [];
     let adminRequests = 0;

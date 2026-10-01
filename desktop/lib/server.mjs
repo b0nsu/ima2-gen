@@ -259,6 +259,13 @@ export class ServerSupervisor extends EventEmitter {
     child.on("error", (err) => {
       if (this.child !== child) return;
       this.lastError = err.message;
+      // A kill that fails while stop() drains this child raises "error" on a
+      // process that may still be alive: keep it so start() cannot spawn a second
+      // server on the same port. Only a confirmed exit releases it.
+      if (this.stopRun?.child === child && child.pid !== undefined) {
+        this.#log(`[desktop] kill error while stopping: ${err.message}`);
+        return;
+      }
       this.#log(`[desktop] spawn error: ${err.message}`);
       this.child = null;
       this.#setState("error");
@@ -388,7 +395,15 @@ export class ServerSupervisor extends EventEmitter {
   }
 
   async restart(settings) {
-    await this.stop();
+    try {
+      await this.stop();
+    } catch (error) {
+      // stop() already put the supervisor in "error" with the reason; tray, menu,
+      // IPC and settings callers fire and forget, so a rejection here would be an
+      // unhandled rejection in the main process.
+      this.#log(`[desktop] restart aborted: ${error instanceof Error ? error.message : String(error)}`);
+      return;
+    }
     this.crashTimes = [];
     await this.start(settings);
   }
