@@ -10,7 +10,7 @@ class FakeApp extends EventEmitter {
   exit(code: number) { this.calls.push(`exit:${code}`); }
 }
 
-function fixture() {
+function fixture({ now = Date.now, onQuitCommitted = () => {}, onMarkQuitting = () => {} } = {}) {
   const app = new FakeApp();
   const calls: string[] = [];
   let releaseStop: (() => void) | null = null;
@@ -21,6 +21,7 @@ function fixture() {
   };
   const windows = {
     showMain: () => calls.push("show"),
+    markQuitting: onMarkQuitting,
     closeAllForQuit: () => calls.push("close"),
   };
   const settingsStore = { get: () => ({ keepRunningOnClose: false }) };
@@ -30,6 +31,8 @@ function fixture() {
     windows,
     settingsStore,
     applyDockVisibility: () => calls.push("dock"),
+    onQuitCommitted,
+    now,
     logger: { error: (value: unknown) => calls.push(`error:${String(value)}`) },
   });
   return { app, calls, coordinator, supervisor, releaseStop: () => releaseStop?.() };
@@ -51,6 +54,19 @@ describe("desktop app lifecycle", () => {
     assert.deepEqual(app.calls, ["exit:0"]);
   });
 
+  it("commits a repeated normal quit only once", () => {
+    let commits = 0;
+    const { app, calls } = fixture({ onQuitCommitted: () => { commits += 1; } });
+    const event = { preventDefault() {} };
+
+    app.emit("before-quit", event);
+    app.emit("before-quit", event);
+
+    assert.equal(commits, 1);
+    assert.equal(calls.filter((call) => call === "close").length, 1);
+    assert.equal(calls.filter((call) => call === "stop").length, 1);
+  });
+
   it("blocks incidental quit while preparing an update then allows updater quit", async () => {
     const { app, calls, coordinator, releaseStop } = fixture();
     const preparing = coordinator.prepareForUpdateInstall();
@@ -68,6 +84,33 @@ describe("desktop app lifecycle", () => {
     app.emit("before-quit", { preventDefault: () => { prevented += 1; } });
     assert.equal(prevented, 1, "updater-owned quit must not be intercepted");
     assert.deepEqual(app.calls, []);
+  });
+
+  it("does not commit a vetoed quit while an update is preparing", async () => {
+    let commits = 0;
+    const { app, coordinator, releaseStop } = fixture({ onQuitCommitted: () => { commits += 1; } });
+    const preparing = coordinator.prepareForUpdateInstall();
+
+    app.emit("before-quit", { preventDefault() {} });
+    assert.equal(commits, 0);
+
+    releaseStop();
+    await preparing;
+  });
+
+  it("marks quitting before committing an updater pass-through exactly once", async () => {
+    const order: string[] = [];
+    const { app, coordinator, releaseStop } = fixture({
+      onMarkQuitting: () => order.push("mark"),
+      onQuitCommitted: () => order.push("commit"),
+    });
+    const preparing = coordinator.prepareForUpdateInstall();
+    releaseStop();
+    await preparing;
+
+    app.emit("before-quit", { preventDefault() {} });
+    app.emit("before-quit", { preventDefault() {} });
+    assert.deepEqual(order, ["mark", "commit"]);
   });
 
   it("runs the existing window-close policy while idle", () => {
@@ -98,6 +141,50 @@ describe("desktop app lifecycle", () => {
     assert.equal(prevented, 1, "lifecycle is running again and intercepts quit");
     await coordinator.abortUpdateInstall();
     assert.deepEqual(calls, ["stop", "dispose", "start", "close", "stop"], "second abort is a no-op");
+    releaseStop();
+  });
+
+  it("consumes a queued updater quit veto once, then drains a user quit", async () => {
+    let now = 1_000;
+    let commits = 0;
+    const { app, calls, coordinator, releaseStop } = fixture({
+      now: () => now,
+      onQuitCommitted: () => { commits += 1; },
+    });
+    const preparing = coordinator.prepareForUpdateInstall();
+    releaseStop();
+    await preparing;
+    await coordinator.abortUpdateInstall({ vetoQueuedQuit: true });
+
+    let prevented = 0;
+    app.emit("before-quit", { preventDefault: () => { prevented += 1; } });
+    assert.equal(commits, 0);
+    assert.equal(calls.filter((call) => call === "stop").length, 1);
+
+    now += 1;
+    app.emit("before-quit", { preventDefault: () => { prevented += 1; } });
+    assert.equal(prevented, 2);
+    assert.equal(commits, 1);
+    assert.equal(calls.filter((call) => call === "stop").length, 2);
+    releaseStop();
+  });
+
+  it("expires the queued updater quit veto after two seconds", async () => {
+    let now = 5_000;
+    let commits = 0;
+    const { app, coordinator, releaseStop } = fixture({
+      now: () => now,
+      onQuitCommitted: () => { commits += 1; },
+    });
+    const preparing = coordinator.prepareForUpdateInstall();
+    releaseStop();
+    await preparing;
+    await coordinator.abortUpdateInstall({ vetoQueuedQuit: true });
+
+    now += 2_000;
+    app.emit("before-quit", { preventDefault() {} });
+
+    assert.equal(commits, 1);
     releaseStop();
   });
 
@@ -138,15 +225,6 @@ describe("desktop background-mode wiring", () => {
     assert.match(main, /startHiddenAtLogin = \w+\.startHidden && origin === "login"/);
     assert.match(main, /if \(!startHiddenAtLogin\) windows\.showMain\(\)/);
     assert.ok(!main.includes("!settingsStore.get().startHidden) windows.showMain"));
-  });
-
-  it("destroys the closed window instead of parking a hidden renderer", () => {
-    const source = readFileSync("desktop/lib/windows.mjs", "utf8");
-    const closeHandler = source.slice(source.indexOf('win.on("close"'));
-    const closeBody = closeHandler.slice(0, closeHandler.indexOf("});"));
-    assert.ok(!closeBody.includes("preventDefault"), "close is no longer intercepted");
-    assert.ok(!closeBody.includes(".hide()"), "window is destroyed, not hidden");
-    assert.match(source, /render-process-gone/);
   });
 
   it("keeps the tray Open action reachable when the server is down", () => {

@@ -4,7 +4,14 @@ import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import { trayUpdateItem, initialUpdateState } from "../desktop/lib/update-state.mjs";
 import { describe, it } from "node:test";
+import { wireAppLifecycle } from "../desktop/lib/app-lifecycle.mjs";
 import { createUpdaterController } from "../desktop/lib/updater.mjs";
+
+class FakeApp extends EventEmitter {
+  isPackaged = true;
+  getVersion() { return "3.16.1"; }
+  exit() {}
+}
 
 class FakeAutoUpdater extends EventEmitter {
   autoDownload = true;
@@ -41,6 +48,7 @@ function fixture({ responses = [] as number[] } = {}) {
   const dialogs: any[] = [];
   const logs: string[] = [];
   const order: string[] = [];
+  const reverts: unknown[] = [];
   const dialog = {
     async showMessageBox(options: any) {
       dialogs.push(options);
@@ -60,13 +68,10 @@ function fixture({ responses = [] as number[] } = {}) {
     logger,
     loadUpdater: async () => ({ autoUpdater }),
     prepareForInstall: async () => { order.push("prepare"); return true; },
-    revertInstall: async () => { order.push("revert"); },
-    // Large by default so a successful install in a test does not fire mid-suite;
-    // watchdog tests override it with a small value.
-    installWatchdogMs: 600_000,
+    revertInstall: async (options: unknown) => { order.push("revert"); reverts.push(options); },
     ...overrides,
   });
-  return { autoUpdater, dialogs, logs, order, create };
+  return { autoUpdater, dialogs, logs, order, reverts, create };
 }
 
 async function settle() {
@@ -217,7 +222,7 @@ describe("desktop updater", () => {
     }
     assert.ok(main.indexOf("await supervisor.start") < main.indexOf("void updater.checkForUpdates()"));
     assert.match(main, /prepareForInstall: \(\) => lifecycle\.prepareForUpdateInstall\(\)/);
-    assert.match(main, /revertInstall: \(\) => lifecycle\.abortUpdateInstall\(\)/);
+    assert.match(main, /revertInstall: \(opts\) => lifecycle\.abortUpdateInstall\(opts\)/);
   });
 });
 
@@ -314,27 +319,83 @@ describe("desktop update controller state", () => {
     assert.equal(controller.snapshot().phase, "error");
   });
 
-  it("recovers the app when quitAndInstall returns but never exits (silent handoff failure)", async () => {
+  it("recovers a synchronous handoff error without arming the queued-quit veto", async (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
     const f = fixture();
-    const controller = await f.create({ installWatchdogMs: 30 });
+    const controller = await f.create({ platform: "win32", arch: "x64" });
     f.autoUpdater.emitDownloaded();
     await settle();
-    assert.equal(await controller.installUpdate({ confirm: false }), true);
-    assert.equal(controller.snapshot().phase, "installing");
-    await new Promise((r) => setTimeout(r, 100));
-    assert.deepEqual(f.order, ["prepare", "revert"]);
+    f.autoUpdater.quitAndInstall = () => { f.autoUpdater.emit("error", new Error("sync handoff")); };
+
+    assert.equal(await controller.installUpdate({ confirm: false }), false);
+    t.mock.timers.tick(60_000);
+    assert.deepEqual(f.reverts, [{ vetoQueuedQuit: false }]);
     assert.equal(controller.snapshot().phase, "error");
-    assert.match(controller.snapshot().error, /installer did not start/);
   });
 
-  it("disposes the install watchdog so a late quit does not recover", async () => {
+  it("vetoes the updater queued quit after an asynchronous handoff error", async () => {
+    const f = fixture();
+    const app = new FakeApp();
+    const calls: string[] = [];
+    const lifecycle = wireAppLifecycle({
+      app,
+      supervisor: { start: async () => calls.push("start"), stop: async () => calls.push("stop"), dispose: () => calls.push("dispose") },
+      windows: { showMain() {}, closeAllForQuit: () => calls.push("close") },
+      settingsStore: { get: () => ({ keepRunningOnClose: true }) },
+      applyDockVisibility() {},
+    });
+    const controller = await f.create({
+      app,
+      platform: "win32",
+      arch: "x64",
+      prepareForInstall: () => lifecycle.prepareForUpdateInstall(),
+      revertInstall: (options: unknown) => lifecycle.abortUpdateInstall(options),
+    });
+    f.autoUpdater.emitDownloaded();
+    await settle();
+    let prevented = 0;
+    f.autoUpdater.quitAndInstall = () => {
+      process.nextTick(() => f.autoUpdater.emit("error", new Error("spawn failed")));
+      setImmediate(() => app.emit("before-quit", { preventDefault: () => { prevented += 1; } }));
+    };
+
+    assert.equal(await controller.installUpdate({ confirm: false }), true);
+    await settle();
+    assert.equal(prevented, 1);
+    assert.equal(calls.filter((call) => call === "stop").length, 1);
+    assert.equal(controller.snapshot().phase, "error");
+    app.emit("before-quit", { preventDefault: () => { prevented += 1; } });
+    assert.equal(calls.filter((call) => call === "stop").length, 2);
+  });
+
+  it("uses no watchdog on darwin and a 15 second default elsewhere", async (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const mac = fixture();
+    const win = fixture();
+    const macController = await mac.create();
+    const winController = await win.create({ platform: "win32", arch: "x64" });
+    mac.autoUpdater.emitDownloaded();
+    win.autoUpdater.emitDownloaded();
+    await settle();
+    await macController.installUpdate({ confirm: false });
+    await winController.installUpdate({ confirm: false });
+
+    t.mock.timers.tick(60_000);
+    assert.deepEqual(mac.order, ["prepare"]);
+    assert.equal(macController.snapshot().phase, "installing");
+    assert.deepEqual(win.order, ["prepare", "revert"]);
+    assert.equal(winController.snapshot().phase, "error");
+  });
+
+  it("disposes the install watchdog so a late quit does not recover", async (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
     const f = fixture();
     const controller = await f.create({ installWatchdogMs: 30 });
     f.autoUpdater.emitDownloaded();
     await settle();
     await controller.installUpdate({ confirm: false });
     controller.dispose();
-    await new Promise((r) => setTimeout(r, 100));
+    t.mock.timers.tick(100);
     assert.deepEqual(f.order, ["prepare"]);
   });
 

@@ -70,6 +70,8 @@ class UpdateController {
     this.checking = false;
     this.downloading = null;
     this.installing = false;
+    this.handoff = false;
+    this.handoffReturned = false;
     this.disposed = false;
     if (autoUpdater) this.listen();
   }
@@ -106,7 +108,14 @@ class UpdateController {
         this.dispatch({ type: "downloaded", version: info.version });
         void this.installUpdate({ confirm: true });
       },
-      error: (error) => this.fail(error, "updater error"),
+      error: (error) => {
+        if (this.handoff) {
+          const vetoQueuedQuit = this.handoffReturned;
+          this.#endHandoff();
+          void this.#abortInstall({ vetoQueuedQuit });
+        }
+        this.fail(error, "updater error");
+      },
     };
     for (const [name, fn] of Object.entries(handlers)) {
       this.handlers.set(name, fn);
@@ -162,13 +171,18 @@ class UpdateController {
         this.dispatch({ type: "install-cancelled" });
         return false;
       }
+      this.handoff = true;
+      this.handoffReturned = false;
       try {
         this.autoUpdater.quitAndInstall();
+        if (!this.handoff) return false;
+        this.handoffReturned = true;
         this.#armInstallWatchdog();
       } catch (error) {
         // The install prep already stopped the owned server; undo it the way
         // opencodex aborts a coordinated restart instead of staying drained.
-        await this.#abortInstall();
+        this.#endHandoff();
+        await this.#abortInstall({ vetoQueuedQuit: false });
         return this.fail(error, "install failed");
       }
       return true;
@@ -181,12 +195,14 @@ class UpdateController {
 
   #armInstallWatchdog() {
     this.#clearInstallWatchdog();
+    if (this.installWatchdogMs <= 0) return;
     this.installWatchdog = setTimeout(() => {
       this.installWatchdog = null;
       // Reaching this callback means quitAndInstall never ended the app — a
       // silent handoff failure. Recover the server it stopped (opencodex calls
       // this recover_after_failed_install) and surface a retryable error.
-      void this.#abortInstall();
+      this.#endHandoff();
+      void this.#abortInstall({ vetoQueuedQuit: false });
       this.fail(new Error("the update installer did not start"), "install failed");
     }, this.installWatchdogMs);
     if (typeof this.installWatchdog.unref === "function") this.installWatchdog.unref();
@@ -198,10 +214,16 @@ class UpdateController {
     this.installWatchdog = null;
   }
 
-  async #abortInstall() {
+  #endHandoff() {
+    this.handoff = false;
+    this.handoffReturned = false;
+    this.#clearInstallWatchdog();
+  }
+
+  async #abortInstall(options) {
     if (!this.revertInstall) return;
     try {
-      await this.revertInstall();
+      await this.revertInstall(options);
     } catch (error) {
       this.logger.error(`[desktop:update] install abort failed: ${errorMessage(error)}`);
     }
@@ -221,7 +243,7 @@ class UpdateController {
 
   dispose() {
     this.disposed = true;
-    this.#clearInstallWatchdog();
+    this.#endHandoff();
     for (const [name, fn] of this.handlers) this.autoUpdater.removeListener(name, fn);
     this.handlers.clear();
     this.listeners.clear();
@@ -231,8 +253,8 @@ class UpdateController {
 export async function createUpdaterController(options) {
   const {
     app, dialog, prepareForInstall,
-    revertInstall = null, installWatchdogMs = INSTALL_WATCHDOG_MS,
     platform = process.platform, arch = process.arch, env = process.env,
+    revertInstall = null, installWatchdogMs = platform === "darwin" ? 0 : INSTALL_WATCHDOG_MS,
     logger = console, now = Date.now,
     loadUpdater = () => import("electron-updater"), autoDownload = true,
   } = options;

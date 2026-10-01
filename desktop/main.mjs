@@ -16,6 +16,7 @@ import { installContextMenus } from "./lib/context-menu.mjs";
 import { installPopupPolicy } from "./lib/window-open.mjs";
 import { registerIpc } from "./lib/ipc.mjs";
 import { wireAppLifecycle } from "./lib/app-lifecycle.mjs";
+import { createQuitCleanup } from "./lib/quit-cleanup.mjs";
 import { createUpdaterController } from "./lib/updater.mjs";
 import { evaluateLaunchVersion, compareVersions } from "./lib/update-receipt.mjs";
 import { launchOrigin } from "./lib/launch-origin.mjs";
@@ -53,16 +54,22 @@ async function boot() {
   const startHiddenAtLogin = settings0.startHidden && origin === "login";
   const { supervisor, windows, popup } = createRuntime(settingsStore, icons, origin);
   const loginItem = createLoginItem({ app });
-  const lifecycle = wireAppLifecycle({ supervisor, windows, settingsStore, applyDockVisibility, app });
+  const quitCleanup = createQuitCleanup();
+  const lifecycle = wireAppLifecycle({
+    supervisor, windows, settingsStore, applyDockVisibility, app,
+    onQuitCommitted: () => quitCleanup.run(),
+  });
   const updater = await createUpdaterController({
     app, dialog, prepareForInstall: () => lifecycle.prepareForUpdateInstall(),
-    revertInstall: () => lifecycle.abortUpdateInstall(), autoDownload: settings0.autoUpdate,
+    revertInstall: (opts) => lifecycle.abortUpdateInstall(opts), autoDownload: settings0.autoUpdate,
   });
+  quitCleanup.register("updater", () => updater.dispose());
+  if (quitCleanup.committed) return;
   if (launch.updatedTo) updater.markUpdated(launch.updatedTo);
   const actions = createActions({ settingsStore, supervisor, windows, popup, updater });
   const tray = new TrayController({ iconPath: icons.trayIcon, updateIconPath: icons.trayUpdateIcon, actions });
   windows.onHiddenToTray = hiddenTrayNotifier(tray);
-  wireDesktop({ settingsStore, supervisor, windows, popup, updater, actions, tray, loginItem });
+  wireDesktop({ settingsStore, supervisor, windows, popup, updater, actions, tray, loginItem, quitCleanup });
   // One announcement per update: the app window's toast when it opens, the OS notification when
   // the app starts hidden. Claiming here keeps the toast from repeating it; the tray keeps
   // "What's New" either way.
@@ -141,12 +148,9 @@ function createActions({ settingsStore, supervisor, windows, popup, updater }) {
   };
 }
 
-function wireDesktop({ settingsStore, supervisor, windows, popup, updater, actions, tray, loginItem }) {
-  app.on("before-quit", () => {
-    stopBackgroundChecks();
-    updater.dispose();
-    popup.destroy();
-  });
+function wireDesktop({ settingsStore, supervisor, windows, popup, updater, actions, tray, loginItem, quitCleanup }) {
+  quitCleanup.register("background-checks", stopBackgroundChecks);
+  quitCleanup.register("popup", () => popup.destroy());
   tray.create();
   tray.update({ settings: settingsStore.get() });
   const pushUpdateState = (state) => {
