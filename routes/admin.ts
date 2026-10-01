@@ -3,6 +3,7 @@ import { timingSafeEqual } from "node:crypto";
 import { requireRuntimeContext, type RouteRuntimeContext } from "../lib/runtimeContext.js";
 import { logEvent } from "../lib/logger.js";
 import { stopIntentLine } from "../lib/runtimeIdentity.js";
+import { requestShutdown, type ShutdownReason } from "../bin/lib/platform.js";
 
 /**
  * Local admin surface. POST /api/admin/stop shuts the server down cleanly.
@@ -19,18 +20,21 @@ import { stopIntentLine } from "../lib/runtimeIdentity.js";
  * 2. Any request carrying an Origin header is refused outright. Browser-issued
  *    cross-origin fetches always carry Origin; the ima2 CLI never does.
  *
- * Shutdown itself is a self-signal: the SIGTERM handler installed by
- * onShutdown() owns the ONLY complete teardown (unadvertise, proxy children,
- * agent queue, timers, DB close, exit) and its shutdownStarted latch makes the
- * signal idempotent. Calling shutdownServerAndMcp() directly here would strand
- * proxy children and leave a stale advertise file (audit blocker 2).
+ * Shutdown goes through the coordinator installed by onShutdown(), which owns
+ * the complete teardown (unadvertise, proxy children, agent queue, timers, DB
+ * close, exit). A Windows self-SIGTERM terminates the process without running
+ * that handler, so the route requests shutdown directly instead.
  *
- * Before the self-signal the route prints the stop-intent line on stdout and
- * signals only once that write has flushed. A supervisor that owns this
+ * Before requesting shutdown the route prints the stop-intent line on stdout
+ * and proceeds only once that write has flushed. A supervisor that owns this
  * process's pipe (the desktop shell) reads it to tell a requested stop from a
  * crash, so it does not restart a server the user just stopped.
  */
-export function registerAdminRoutes(app: Express, ctxRaw: RouteRuntimeContext) {
+export function registerAdminRoutes(
+  app: Express,
+  ctxRaw: RouteRuntimeContext,
+  { shutdown = requestShutdown }: { shutdown?: (reason: ShutdownReason) => void | Promise<void> } = {},
+) {
   const ctx = requireRuntimeContext(ctxRaw);
   app.post("/api/admin/stop", (req: Request, res: Response) => {
     if (typeof req.headers.origin === "string" && req.headers.origin.length > 0) {
@@ -48,15 +52,8 @@ export function registerAdminRoutes(app: Express, ctxRaw: RouteRuntimeContext) {
     }
     logEvent("admin", "stop_requested", { pid: process.pid });
     res.status(202).json({ ok: true, pid: process.pid, stopping: true });
-    const selfSignal = () => {
-      try {
-        process.kill(process.pid, "SIGTERM");
-      } catch {
-        process.exit(0);
-      }
-    };
     setImmediate(() => {
-      process.stdout.write(stopIntentLine(ctx.bootId), () => selfSignal());
+      process.stdout.write(stopIntentLine(ctx.bootId), () => { void shutdown("admin"); });
     });
   });
 }
