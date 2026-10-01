@@ -91,22 +91,53 @@ export function openUrl(url: string): { ok: boolean; error?: string } {
  * before forceful exit, giving file handles and sockets time to close cleanly.
  */
 const SHUTDOWN_GRACE_MS = 3_000;
-let shutdownStarted = false;
+export type ShutdownReason = NodeJS.Signals | "admin";
+type ShutdownHandler = (reason: ShutdownReason) => void | Promise<void>;
 
-export function onShutdown(handler: (signal: NodeJS.Signals) => void | Promise<void>) {
+export function createShutdownCoordinator({
+  exit = (code: number) => process.exit(code),
+  graceMs = SHUTDOWN_GRACE_MS,
+}: { exit?: (code: number) => void; graceMs?: number } = {}) {
+  let handler: ShutdownHandler | null = null;
+  let run: Promise<void> | null = null;
+  return {
+    setHandler(next: ShutdownHandler) { handler = next; },
+    request(reason: ShutdownReason): Promise<void> {
+      if (run) return run;
+      let exited = false;
+      let force: NodeJS.Timeout;
+      const finish = () => {
+        if (exited) return;
+        exited = true;
+        clearTimeout(force);
+        exit(0);
+      };
+      force = setTimeout(finish, graceMs);
+      force.unref?.();
+      run = (async () => {
+        try {
+          await handler?.(reason);
+        } catch (err) {
+          logWarn("shutdown", "handler_failed", { signal: reason, error: err });
+        }
+        finish();
+      })();
+      return run;
+    },
+  };
+}
+
+const shutdown = createShutdownCoordinator();
+export const requestShutdown = (reason: ShutdownReason) => shutdown.request(reason);
+
+export function onShutdown(handler: ShutdownHandler) {
+  shutdown.setHandler(handler);
   const signals: NodeJS.Signals[] = isWin
     ? ["SIGINT", "SIGTERM", "SIGBREAK"]
     : ["SIGINT", "SIGTERM", "SIGHUP"];
   for (const sig of signals) {
     try {
-      process.on(sig, async () => {
-        if (shutdownStarted) return;
-        shutdownStarted = true;
-        const forceExit = setTimeout(() => process.exit(0), SHUTDOWN_GRACE_MS);
-        forceExit.unref?.();
-        try { await handler(sig); } catch (err) { logWarn("shutdown", "handler_failed", { signal: sig, error: err }); }
-        process.exit(0);
-      });
+      process.on(sig, () => { void requestShutdown(sig); });
     } catch {
       // Some signals aren't installable on certain platforms; ignore.
     }

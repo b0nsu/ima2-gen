@@ -199,6 +199,14 @@ error) that drives the menu bar icon (a template dot on macOS, `tray-update.*` e
 the tray and app menus, the tray popup banner and the served UI (IPC `desktop:update:*`).
 Install-on-quit stays off: every install asks first (IPC installs always show the native
 dialog), then the app stops and disposes the local server before `quitAndInstall()`.
+If the handoff fails the app goes back to running and restarts that server: a thrown
+`quitAndInstall()`, an updater error during the handoff (an NSIS spawn error arrives after
+the call returned, so the lifecycle also vetoes electron-updater's queued quit for 2 s), or,
+on Windows and Linux, a 15 s watchdog when the app is still alive. macOS has no watchdog
+because Squirrel defers the quit until its own download finishes. Quit cleanup (updater,
+background checks, tray popup) runs only once a quit is committed
+(`desktop/lib/app-lifecycle.mjs`, `desktop/lib/quit-cleanup.mjs`), so a vetoed quit
+leaves the updater usable.
 After an update relaunch, `lastRunVersion` in the desktop settings yields one "ima2 updated
 to vX" notification. Draft releases stay invisible to installed updaters until the approved
 publication above.

@@ -2,6 +2,7 @@ import { BrowserWindow, shell } from "electron";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { isExternalWebUrl, isLocalServerUrl, resolveWindowOpen } from "./window-open.mjs";
+import { wireMainWindow } from "./window-lifecycle.mjs";
 
 const desktopDir = dirname(dirname(fileURLToPath(import.meta.url)));
 const PRELOAD = join(desktopDir, "preload.cjs");
@@ -65,18 +66,7 @@ export class WindowManager {
     }));
     this.main = win;
     win.show();
-    win.on("close", (e) => {
-      if (this.quitting || !this.getSettings().keepRunningOnClose) return;
-      e.preventDefault();
-      win.hide();
-      this.onHiddenToTray();
-    });
-    win.on("closed", () => {
-      this.main = null;
-      this.onVisibilityChange();
-    });
-    win.on("hide", () => this.onVisibilityChange());
-    win.on("show", () => this.onVisibilityChange());
+    wireMainWindow(win, { manager: this });
     const contents = win.webContents;
     contents.setWindowOpenHandler(({ url }) => {
       const outcome = resolveWindowOpen(url, this.getServerUrl());
@@ -151,6 +141,10 @@ export class WindowManager {
 
   hasVisibleWindow() {
     return BrowserWindow.getAllWindows().some((w) => w.isVisible());
+  }
+
+  markQuitting() {
+    this.quitting = true;
   }
 
   closeAllForQuit() {

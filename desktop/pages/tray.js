@@ -12,7 +12,8 @@ function renderStatus(status) {
   el.dataset.state = state;
   const host = status?.url ? ` · ${status.url.replace(/^https?:\/\//, "")}` : "";
   el.textContent = state === "error" && status.lastError ? `${STATE_TEXT.error}: ${status.lastError}` : `${STATE_TEXT[state] ?? state}${state === "running" ? host : ""}`;
-  $("open").disabled = state !== "running" && state !== "starting";
+  // "Open" stays enabled: the window is also the recovery surface (its loading
+  // page offers Start/Restart and Open Server Log when the server is down).
   $("browser").disabled = state !== "running";
 }
 
