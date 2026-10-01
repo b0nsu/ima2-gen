@@ -2,6 +2,7 @@ import { BrowserWindow, shell } from "electron";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { isExternalWebUrl, isLocalServerUrl, resolveWindowOpen } from "./window-open.mjs";
+import { wireMainWindow } from "./window-lifecycle.mjs";
 
 const desktopDir = dirname(dirname(fileURLToPath(import.meta.url)));
 const PRELOAD = join(desktopDir, "preload.cjs");
@@ -20,10 +21,6 @@ const TRAFFIC_LIGHT_POSITION = { x: 16, y: 13 };
 // remain reachable via accelerators.
 const TITLE_BAR_OVERLAY = { height: 40, color: "#00000000", symbolColor: "#90909d" };
 
-// A crashed renderer gets a bounded reload instead of a dead window; the
-// loading page (not a server URL) is what needs recovering after a crash.
-const RELOAD_BUDGET = { count: 3, windowMs: 60_000, delayMs: 250 };
-
 export class WindowManager {
   constructor({ getServerUrl, getSettings, iconPath, onVisibilityChange, onHiddenToTray }) {
     this.getServerUrl = getServerUrl;
@@ -34,7 +31,6 @@ export class WindowManager {
     this.main = null;
     this.settings = null;
     this.quitting = false;
-    this.rendererReloads = [];
   }
 
   #webPreferences() {
@@ -70,19 +66,7 @@ export class WindowManager {
     }));
     this.main = win;
     win.show();
-    win.on("close", () => {
-      if (this.quitting || !this.getSettings().keepRunningOnClose) return;
-      // cli-jaw does the same: the window is destroyed, the server keeps running
-      // in the tray, and reopening recreates the window (which re-syncs to the
-      // live server) instead of idling a hidden renderer.
-      this.onHiddenToTray();
-    });
-    win.on("closed", () => {
-      this.main = null;
-      this.onVisibilityChange();
-    });
-    win.on("hide", () => this.onVisibilityChange());
-    win.on("show", () => this.onVisibilityChange());
+    wireMainWindow(win, { manager: this });
     const contents = win.webContents;
     contents.setWindowOpenHandler(({ url }) => {
       const outcome = resolveWindowOpen(url, this.getServerUrl());
@@ -100,14 +84,6 @@ export class WindowManager {
     contents.on("did-fail-load", (_e, code, _desc, url, isMainFrame) => {
       if (!isMainFrame || code === -3 || String(url).startsWith("file:")) return;
       void contents.loadFile(LOADING_PAGE);
-    });
-    contents.on("render-process-gone", (_e, details) => {
-      if (details.reason === "clean-exit" || details.reason === "killed") return;
-      const now = Date.now();
-      this.rendererReloads = this.rendererReloads.filter((t) => now - t < RELOAD_BUDGET.windowMs);
-      if (this.rendererReloads.length >= RELOAD_BUDGET.count) return;
-      this.rendererReloads.push(now);
-      setTimeout(() => { if (!win.isDestroyed()) contents.reload(); }, RELOAD_BUDGET.delayMs);
     });
     this.syncMainContent();
     return win;
@@ -165,6 +141,10 @@ export class WindowManager {
 
   hasVisibleWindow() {
     return BrowserWindow.getAllWindows().some((w) => w.isVisible());
+  }
+
+  markQuitting() {
+    this.quitting = true;
   }
 
   closeAllForQuit() {
