@@ -36,7 +36,7 @@ merges #365 into dev and ships them in a patch release.
 | ID | Decision | Findings |
 |---|---|---|
 | D1 | `wireAppLifecycle` owns the irreversible-quit decision and calls `onQuitCommitted()` once (normal-quit drain start, or update-install pass-through) after `windows.markQuitting()`; main.mjs moves stopBackgroundChecks / updater.dispose / popup.destroy there and drops its own before-quit listener | F1, F12 |
-| D2 | UpdateController has a handoff flag from just before `quitAndInstall()` until dispose / watchdog / error; an autoUpdater `error` during handoff synchronously calls `revertInstall({ vetoQueuedQuit: true })`; `abortUpdateInstall` sets state running and arms a one-use 2 s quit veto before its async server restart | F2 |
+| D2 | UpdateController has a handoff flag from just before `quitAndInstall()` until dispose / watchdog / error; an autoUpdater `error` during handoff synchronously calls `revertInstall({ vetoQueuedQuit })`, where the veto is armed only if `quitAndInstall()` had already returned (then electron-updater has queued `app.quit()`); `abortUpdateInstall` sets state running and, when asked, arms a one-use 2 s quit veto before its async server restart | F2 |
 | D3 | Install watchdog defaults to 15 s on win32/linux and is off on darwin (explicit option still overrides) | F3 |
 | D4 | bin/lib/platform.ts keeps the registered handler and exports `requestShutdown(reason)` (one shared run, same grace timer); signals delegate to it; /api/admin/stop calls it after the stop-intent write instead of self-SIGTERM; registerAdminRoutes takes an optional injected shutdown for tests | F4 |
 | D5 | ServerSupervisor.stop() memoizes one in-flight stop per child; after the force attempt it waits one more grace interval, then sets state error and rejects "server did not exit"; `this.child` cleared only when it is still the stopped child | F5, F6 |
@@ -60,7 +60,7 @@ installed at the repo root and `mock.module("electron")` fails with ERR_MODULE_N
 
 ## Verifiers (PLAN-VERIFIER-REAL-01)
 
-- `node --experimental-test-module-mocks --import tsx --test tests/desktop-*.test.ts tests/stop-command-contract.test.ts tests/platform-shutdown.test.ts` — imports the changed desktop modules, routes/admin.ts and bin/lib/platform.ts directly. Baseline at 1e528690: 234/234 desktop tests pass (exit 0).
+- `test -f tests/platform-shutdown.test.ts && test -f tests/desktop-window-lifecycle.test.ts && test -f tests/desktop-quit-cleanup.test.ts && node --experimental-test-module-mocks --import tsx --test tests/desktop-*.test.ts tests/stop-command-contract.test.ts tests/platform-shutdown.test.ts` — the `test -f` guards fail the command when a planned suite is missing (node skips a missing explicit path, audit B3); C also confirms each new suite name appears in the output. Baseline at 1e528690: desktop glob 234/234; auditor run with the stop contract 250/250 (exit 0).
 - `npm run typecheck` — tsconfig.json includes routes/ and bin/lib (reads admin.ts, platform.ts).
 - `npm run typecheck:tests` — reads tests/*.ts.
 - `npm run lint` — covers desktop/, routes/, bin/ (AGENTS.md Test Command).

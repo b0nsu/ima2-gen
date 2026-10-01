@@ -33,17 +33,29 @@ MODIFY desktop/lib/app-lifecycle.mjs
      windows.closeAllForQuit();
 ```
 MODIFY desktop/lib/windows.mjs: add `markQuitting() { this.quitting = true; }`; `closeAllForQuit` keeps setting it.
-MODIFY desktop/main.mjs: delete the `app.on("before-quit", ...)` block in wireDesktop;
-pass `onQuitCommitted: () => { stopBackgroundChecks(); updater.dispose(); popup.destroy(); }`
-to wireAppLifecycle. The lifecycle is created before the updater, so the callback reads
-late-bound `let` references (`updater` assigned after createUpdaterController) and each
-call is wrapped so one failure does not skip the others.
-Concretely (architect reflection gap 1): `let updater = null; let quitCommitted = false;`
-are declared in `boot()` before `wireAppLifecycle`; the callback sets
-`quitCommitted = true` first, then does `updater?.dispose()`; if the quit committed while
-`createUpdaterController()` was still awaited, boot disposes the new controller right
-after assignment (`if (quitCommitted) updater.dispose()`) and returns before tray/menu
-wiring.
+MODIFY desktop/main.mjs: delete the `app.on("before-quit", ...)` block in wireDesktop.
+All quit cleanup goes through one registry (architect gap 1 and audit B2): NEW
+electron-free desktop/lib/quit-cleanup.mjs:
+```js
+export function createQuitCleanup({ logger = console } = {}) {
+  const tasks = new Map(); let committed = false;
+  const runOne = (name, fn) => { try { fn(); } catch (e) { logger.error(`[desktop] quit cleanup ${name} failed: ${e?.message ?? e}`); } };
+  return {
+    get committed() { return committed; },
+    register(name, fn) { if (committed) runOne(name, fn); else tasks.set(name, fn); },
+    run() { if (committed) return; committed = true; for (const [n, fn] of tasks) runOne(n, fn); tasks.clear(); },
+  };
+}
+```
+boot(): `const quitCleanup = createQuitCleanup();` → `wireAppLifecycle({ ..., onQuitCommitted: () => quitCleanup.run() })`;
+after createUpdaterController: `quitCleanup.register("updater", () => updater.dispose())`;
+`if (quitCleanup.committed) return;` before tray/menu/supervisor.start wiring; wireDesktop
+registers "background-checks" and "popup" instead of its own before-quit listener.
+Tests (NEW tests/desktop-quit-cleanup.test.ts): a vetoed quit (lifecycle in
+update-preparing) runs no task; a committed quit runs each task once; a task registered
+after commit runs immediately (the deferred-updater boot race); one throwing task does
+not skip the others. Contract test: desktop/main.mjs contains no `app.on("before-quit"`
+(the lifecycle is the only listener), so the old disposing listener cannot survive.
 
 Activation tests (tests/desktop-app-lifecycle.test.ts): (a) vetoed quit during
 update-preparing does not call onQuitCommitted; (b) update-install pass-through calls it
@@ -60,7 +72,15 @@ MODIFY desktop/lib/updater.mjs
   handoff and started recovery (reflection gap 2). Test: fake `quitAndInstall` emits
   `error` synchronously → installUpdate resolves false, exactly one revert, no watchdog armed, phase error.
 - error listener (the `error` handler registered in the constructor): if `this.handoff`,
-  `this.#endHandoff(); void this.#abortInstall({ vetoQueuedQuit: true })` before `fail()`.
+  `const veto = this.handoffReturned; this.#endHandoff(); void this.#abortInstall({ vetoQueuedQuit: veto })` before `fail()`.
+  Exact sequence (audit B1 + round 2): installUpdate sets `handoff = true, handoffReturned = false`
+  before `quitAndInstall()`; after it returns and `this.handoff` is still true, sets
+  `handoffReturned = true` and arms the watchdog; the error handler captures
+  `handoffReturned` into a local before `#endHandoff()`, which resets both flags.
+  BaseUpdater queues `app.quit()` only when `install()` returned true
+  (BaseUpdater.js:16-26); a synchronous dispatchError inside the call means no quit is
+  queued, so no veto. Tests: synchronous error → revert({vetoQueuedQuit:false}) and the
+  next user quit drains; nextTick error + setImmediate before-quit → veto consumed, no drain.
 - watchdog callback: `this.#endHandoff(); void this.#abortInstall({ vetoQueuedQuit: false })`.
 - `#endHandoff()` clears `handoff` and the watchdog; `dispose()` calls it.
 - `#abortInstall(opts)` passes opts to `revertInstall(opts)`.
