@@ -181,6 +181,16 @@ const { TrayController } = runInNewContext(
   },
 );
 
+it("keeps Open ima2 enabled even when the server is stopped or in error", () => {
+  const tray = new TrayController({ iconPath: "i", updateIconPath: "u", actions: { openApp() {} }, platform: "win32" });
+  for (const state of ["stopped", "error", "starting", "running"]) {
+    tray.status = { state, url: null } as never;
+    const open = tray.menuTemplate().find((item: { label?: string }) => item.label === "Open ima2");
+    assert.ok(open, `no Open ima2 item for state ${state}`);
+    assert.notEqual(open.enabled, false, `Open ima2 must stay enabled in state ${state}`);
+  }
+});
+
 it("swaps pending icons on every platform and keeps native actions and release notes after notice claim", () => {
   for (const platform of ["darwin", "win32", "linux"]) {
     const calls: unknown[] = [];

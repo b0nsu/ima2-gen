@@ -67,10 +67,21 @@ async function requestAdminStop(pid, configDir, log, timeoutMs = 2_500) {
 
 function findOnPath(cmd) {
   const probe = process.platform === "win32" ? "where" : "which";
-  const r = spawnSync(probe, [cmd], { encoding: "utf-8" });
+  const r = spawnSync(probe, [cmd], { encoding: "utf-8", windowsHide: true });
   if (r.status !== 0) return null;
   const first = String(r.stdout || "").split(/\r?\n/).find((l) => l.trim());
   return first ? first.trim() : null;
+}
+
+/**
+ * Windows has no signals: child.kill() is a bare TerminateProcess on the top
+ * process and would orphan the server's own children. taskkill /T /F reaches
+ * the whole tree of the owned child (the pattern cli-jaw uses in jaw-spawn).
+ */
+function killProcessTree(pid) {
+  if (process.platform !== "win32") return false;
+  const r = spawnSync("taskkill", ["/PID", String(pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
+  return !r.error && r.status === 0;
 }
 
 /**
@@ -323,10 +334,15 @@ export class ServerSupervisor extends EventEmitter {
     }
     const graceful = await requestAdminStop(child.pid, this.configDir, (line) => this.#log(line));
     await new Promise((resolve) => {
-      const force = setTimeout(() => { try { child.kill("SIGKILL"); } catch { /* best-effort: child may already have exited */ } }, STOP_GRACE_MS);
+      const force = setTimeout(() => {
+        if (!killProcessTree(child.pid)) { try { child.kill("SIGKILL"); } catch { /* best-effort: child may already have exited */ } }
+      }, STOP_GRACE_MS);
       child.once("exit", () => { clearTimeout(force); resolve(); });
       if (child.exitCode !== null) return resolve();
-      if (!graceful) { try { child.kill("SIGTERM"); } catch { resolve(); } }
+      if (!graceful) {
+        if (killProcessTree(child.pid)) return;
+        try { child.kill("SIGTERM"); } catch { resolve(); }
+      }
     });
     this.child = null;
     this.#setState("stopped", { url: null, external: false, ownership: null, guest: null });

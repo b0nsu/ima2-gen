@@ -60,6 +60,10 @@ function fixture({ responses = [] as number[] } = {}) {
     logger,
     loadUpdater: async () => ({ autoUpdater }),
     prepareForInstall: async () => { order.push("prepare"); return true; },
+    revertInstall: async () => { order.push("revert"); },
+    // Large by default so a successful install in a test does not fire mid-suite;
+    // watchdog tests override it with a small value.
+    installWatchdogMs: 600_000,
     ...overrides,
   });
   return { autoUpdater, dialogs, logs, order, create };
@@ -213,6 +217,7 @@ describe("desktop updater", () => {
     }
     assert.ok(main.indexOf("await supervisor.start") < main.indexOf("void updater.checkForUpdates()"));
     assert.match(main, /prepareForInstall: \(\) => lifecycle\.prepareForUpdateInstall\(\)/);
+    assert.match(main, /revertInstall: \(\) => lifecycle\.abortUpdateInstall\(\)/);
   });
 });
 
@@ -296,6 +301,41 @@ describe("desktop update controller state", () => {
     assert.deepEqual(f.order, []);
     assert.deepEqual(f.autoUpdater.calls, []);
     assert.equal(controller.snapshot().phase, "downloaded");
+  });
+
+  it("reverts the drained lifecycle and reports a retryable error when quitAndInstall throws", async () => {
+    const f = fixture();
+    const controller = await f.create();
+    f.autoUpdater.emitDownloaded();
+    await settle();
+    f.autoUpdater.quitAndInstall = () => { f.order.push("install"); throw new Error("no installer"); };
+    assert.equal(await controller.installUpdate({ confirm: false }), false);
+    assert.deepEqual(f.order, ["prepare", "install", "revert"]);
+    assert.equal(controller.snapshot().phase, "error");
+  });
+
+  it("recovers the app when quitAndInstall returns but never exits (silent handoff failure)", async () => {
+    const f = fixture();
+    const controller = await f.create({ installWatchdogMs: 30 });
+    f.autoUpdater.emitDownloaded();
+    await settle();
+    assert.equal(await controller.installUpdate({ confirm: false }), true);
+    assert.equal(controller.snapshot().phase, "installing");
+    await new Promise((r) => setTimeout(r, 100));
+    assert.deepEqual(f.order, ["prepare", "revert"]);
+    assert.equal(controller.snapshot().phase, "error");
+    assert.match(controller.snapshot().error, /installer did not start/);
+  });
+
+  it("disposes the install watchdog so a late quit does not recover", async () => {
+    const f = fixture();
+    const controller = await f.create({ installWatchdogMs: 30 });
+    f.autoUpdater.emitDownloaded();
+    await settle();
+    await controller.installUpdate({ confirm: false });
+    controller.dispose();
+    await new Promise((r) => setTimeout(r, 100));
+    assert.deepEqual(f.order, ["prepare"]);
   });
 
   it("restores downloaded when preparation refuses and orders native installation", async () => {

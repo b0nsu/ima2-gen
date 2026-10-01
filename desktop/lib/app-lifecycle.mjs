@@ -1,3 +1,5 @@
+import { AUTOSTART_FLAG } from "./launch-origin.mjs";
+
 async function stopAndDispose(supervisor, logger) {
   try {
     await supervisor.stop();
@@ -13,7 +15,11 @@ export function wireAppLifecycle(options) {
   const { app, supervisor, windows, settingsStore, applyDockVisibility, logger = console } = options;
   let state = "running";
 
-  app.on("second-instance", () => windows.showMain());
+  // A login relaunch (the OS fires the login item again while ima2 already runs)
+  // carries --autostart; only a manual relaunch asks for the window.
+  app.on("second-instance", (_event, argv) => {
+    if (!Array.isArray(argv) || !argv.includes(AUTOSTART_FLAG)) windows.showMain();
+  });
   app.on("activate", () => windows.showMain());
   app.on("window-all-closed", () => {
     if (state !== "running") return;
@@ -33,9 +39,28 @@ export function wireAppLifecycle(options) {
     async prepareForUpdateInstall() {
       if (state !== "running") return false;
       state = "update-preparing";
-      await stopAndDispose(supervisor, logger);
+      try {
+        await stopAndDispose(supervisor, logger);
+      } catch (error) {
+        // "update-preparing" still intercepts before-quit; a failed drain must not
+        // leave the app unable to quit normally.
+        state = "running";
+        throw error;
+      }
       state = "update-install";
       return true;
+    },
+    // The opencodex rule: an install that does not happen must not leave the app
+    // drained — go back to running and bring the server the update stopped back.
+    async abortUpdateInstall() {
+      if (state !== "update-install") return;
+      state = "running";
+      try {
+        await supervisor.start(settingsStore.get());
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        logger.error(`[desktop] server restart after aborted install failed: ${message}`);
+      }
     },
   };
 }

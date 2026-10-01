@@ -2,7 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ServerSupervisor } from "../desktop/lib/server.mjs";
@@ -225,5 +225,13 @@ describe("ServerSupervisor", () => {
     } finally {
       await h.cleanup();
     }
+  });
+});
+
+describe("windows force-kill", () => {
+  it("tree-kills the owned server on Windows and hides every spawned console", () => {
+    const source = readFileSync("desktop/lib/server.mjs", "utf8");
+    assert.match(source, /taskkill", \["\/PID", String\(pid\), "\/T", "\/F"\]/);
+    for (const call of source.matchAll(/spawnSync\([^;]*\)/g)) assert.match(call[0], /windowsHide: true/);
   });
 });
