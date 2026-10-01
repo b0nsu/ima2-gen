@@ -2,15 +2,15 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
-import { mkdtempSync, rmSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ServerSupervisor } from "../desktop/lib/server.mjs";
+import { killProcessTree, ServerSupervisor } from "../desktop/lib/server.mjs";
 
 // devlog/_plan/260929_background_runtime/030 + 040: the supervisor asks the
 // bundled CLI first, and restarts only a bundled child that crashed.
 
-type Child = EventEmitter & { pid: number; stdout: PassThrough; stderr: PassThrough; exitCode: number | null; signalCode: string | null; kill: () => boolean; env: Record<string, string> };
+type Child = EventEmitter & { pid: number; stdout: PassThrough; stderr: PassThrough; exitCode: number | null; signalCode: string | null; kill: (signal?: string) => boolean; env: Record<string, string> };
 
 const SETTINGS = { port: 3333, existingServer: "ask", nodeBinary: "/fake/node", configDir: "", devLogging: false };
 const statusRun = (doc: Record<string, unknown>, code: number) => ({ code, stdout: JSON.stringify({ schema: "ima2-status/1", manager: { state: "absent" }, serviceOwnership: "unmanaged", stoppable: false, runtime: null, ...doc }), stderr: "" });
@@ -35,7 +35,7 @@ function harness(cliAnswers: Array<{ code: number | null; stdout: string; stderr
     sup.dispose();
     rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   };
-  return { sup, children, cliCalls, cleanup };
+  return { sup, children, cliCalls, dir, cleanup };
 }
 
 function exit(c: Child, code: number | null, signal: string | null = null) {
@@ -230,6 +230,65 @@ describe("ServerSupervisor", () => {
 });
 
 describe("windows force-kill", () => {
+  it("rejects a stop when the child survives every kill attempt", { timeout: 1_000 }, async () => {
+    const graceMs = 20;
+    const h = harness([ABSENT], { killTreeFn: () => false, stopGraceMs: graceMs });
+    try {
+      const c = await running(h);
+      c.kill = () => false;
+      const startedAt = Date.now();
+      await assert.rejects(h.sup.stop(), /server did not exit/);
+      assert.ok(Date.now() - startedAt <= graceMs * 2 + 50, "stop is bounded by two grace intervals");
+      assert.equal(h.sup.state, "error");
+      assert.equal(h.sup.lastError, "server did not exit");
+      assert.equal((h.sup as unknown as { child: Child | null }).child, c);
+    } finally {
+      await h.cleanup();
+    }
+  });
+
+  it("shares the admin request and tree kill between concurrent stops", async (t) => {
+    const killed: number[] = [];
+    let adminRequests = 0;
+    const h = harness([ABSENT], { killTreeFn: (pid: number) => { killed.push(pid); return true; }, stopGraceMs: 20 });
+    t.mock.method(globalThis, "fetch", async (_input, init) => {
+      if (init?.method === "POST") adminRequests += 1;
+      return init?.method === "POST" ? new Response(null, { status: 202 }) : Response.json({ ok: true });
+    });
+    try {
+      const c = await running(h);
+      writeFileSync(join(h.dir, "server.json"), JSON.stringify({ pid: c.pid, adminNonce: "nonce", url: "http://127.0.0.1:1" }));
+      (h.sup as unknown as { configDir: string }).configDir = h.dir;
+      const first = h.sup.stop();
+      const second = h.sup.stop();
+      await tick(30);
+      exit(c, 0);
+      await Promise.all([first, second]);
+      await tick();
+      assert.equal(adminRequests, 1);
+      assert.deepEqual(killed, [c.pid]);
+    } finally {
+      await h.cleanup();
+    }
+  });
+
+  it("does not resolve early when SIGTERM throws", async () => {
+    let settled = false;
+    const h = harness([ABSENT], { killTreeFn: () => false, stopGraceMs: 20 });
+    try {
+      const c = await running(h);
+      c.kill = (signal) => { if (signal === "SIGTERM") throw new Error("kill failed"); return false; };
+      const stopping = h.sup.stop().finally(() => { settled = true; });
+      await tick(5);
+      assert.equal(settled, false);
+      exit(c, 0);
+      await stopping;
+      await tick();
+    } finally {
+      await h.cleanup();
+    }
+  });
+
   it("tree-kills a live owned child when the graceful stop is unavailable", async () => {
     const killed: number[] = [];
     const h = harness([ABSENT], { killTreeFn: (pid: number) => { killed.push(pid); return true; } });
@@ -263,9 +322,23 @@ describe("windows force-kill", () => {
     }
   });
 
-  it("tree-kills the owned server on Windows and hides every spawned console", () => {
-    const source = readFileSync("desktop/lib/server.mjs", "utf8");
-    assert.match(source, /taskkill", \["\/PID", String\(pid\), "\/T", "\/F"\]/);
-    for (const call of source.matchAll(/spawnSync\([^;]*\)/g)) assert.match(call[0], /windowsHide: true/);
+  it("runs taskkill for the full Windows process tree", () => {
+    const calls: unknown[][] = [];
+    const spawnSyncFn = (...args: unknown[]) => { calls.push(args); return { status: 0 }; };
+    // This fake implements only the spawnSync overload used by killProcessTree.
+    assert.equal(killProcessTree(123, { platform: "win32", spawnSyncFn: spawnSyncFn as never }), true);
+    assert.deepEqual(calls, [["taskkill", ["/PID", "123", "/T", "/F"], { stdio: "ignore", windowsHide: true }]]);
+  });
+
+  it("reports a non-zero taskkill status as failure", () => {
+    assert.equal(killProcessTree(123, { platform: "win32", spawnSyncFn: (() => ({ status: 1 })) as never }), false);
+  });
+
+  it("does not spawn taskkill on non-Windows platforms", () => {
+    let spawned = false;
+    const spawnSyncFn = () => { spawned = true; return { status: 0 }; };
+    const result = killProcessTree(123, { platform: "darwin", spawnSyncFn: spawnSyncFn as never });
+    assert.equal(result, false);
+    assert.equal(spawned, false);
   });
 });

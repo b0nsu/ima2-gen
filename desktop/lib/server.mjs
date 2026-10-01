@@ -78,9 +78,9 @@ function findOnPath(cmd) {
  * process and would orphan the server's own children. taskkill /T /F reaches
  * the whole tree of the owned child (the pattern cli-jaw uses in jaw-spawn).
  */
-function killProcessTree(pid) {
-  if (process.platform !== "win32") return false;
-  const r = spawnSync("taskkill", ["/PID", String(pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
+export function killProcessTree(pid, { platform = process.platform, spawnSyncFn = spawnSync } = {}) {
+  if (platform !== "win32") return false;
+  const r = spawnSyncFn("taskkill", ["/PID", String(pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
   return !r.error && r.status === 0;
 }
 
@@ -115,6 +115,7 @@ export class ServerSupervisor extends EventEmitter {
     }));
     Object.assign(this, { child: null, state: "stopped", url: null, external: false, lastError: null, crashTimes: [], stopping: false, logStream: null, configDir: "" });
     Object.assign(this, { ownership: null, guest: null, guestStatus: null, note: null, stoppedBy: null, childBootId: null, generation: 0 });
+    this.stopRun = null;
   }
 
   #setState(state, extra = {}) {
@@ -324,38 +325,66 @@ export class ServerSupervisor extends EventEmitter {
     setTimeout(() => this.#spawn(settings, gen), 1_000);
   }
 
-  async stop() {
-    this.generation++;
-    this.stopping = true;
-    const child = this.child;
-    if (!child) {
-      this.#setState("stopped", { url: null, external: false, ownership: null, guest: null });
-      return;
-    }
+  async #stopChild(child) {
     const graceful = await requestAdminStop(child.pid, this.configDir, (line) => this.#log(line));
-    await new Promise((resolve) => {
+    await new Promise((resolve, reject) => {
       let settled = false;
+      let forceTimer = null;
+      let finalTimer = null;
+      const cleanup = () => {
+        clearTimeout(forceTimer);
+        clearTimeout(finalTimer);
+        child.off("exit", finish);
+      };
       const finish = () => {
         if (settled) return;
         settled = true;
-        clearTimeout(force);
+        cleanup();
         resolve();
       };
-      const force = setTimeout(() => {
-        // The child may have exited while requestAdminStop was in flight —
-        // never tree-kill a pid we can no longer prove is our server.
-        if (settled || child.exitCode !== null || child.signalCode !== null) return;
-        if (!this.killTreeFn(child.pid)) { try { child.kill("SIGKILL"); } catch { /* best-effort: child may already have exited */ } }
-      }, this.stopGraceMs);
+      const fail = () => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(new Error("server did not exit"));
+      };
+      const force = () => {
+        if (settled) return;
+        if (child.exitCode !== null || child.signalCode !== null) return finish();
+        if (!this.killTreeFn(child.pid)) { try { child.kill("SIGKILL"); } catch { /* best-effort */ } }
+        finalTimer = setTimeout(fail, this.stopGraceMs);
+      };
       child.once("exit", finish);
       if (child.exitCode !== null || child.signalCode !== null) return finish();
-      if (!graceful) {
-        if (this.killTreeFn(child.pid)) return; // the exit event resolves
-        try { child.kill("SIGTERM"); } catch { finish(); }
+      if (!graceful && this.killTreeFn(child.pid)) {
+        finalTimer = setTimeout(fail, this.stopGraceMs);
+        return;
       }
+      if (!graceful) { try { child.kill("SIGTERM"); } catch { /* force below */ } }
+      forceTimer = setTimeout(force, this.stopGraceMs);
     });
-    this.child = null;
-    this.#setState("stopped", { url: null, external: false, ownership: null, guest: null });
+  }
+
+  stop() {
+    const child = this.child;
+    if (this.stopRun?.child === child) return this.stopRun.promise;
+    this.generation++;
+    this.stopping = true;
+    if (!child) {
+      this.#setState("stopped", { url: null, external: false, ownership: null, guest: null });
+      return Promise.resolve();
+    }
+    const promise = this.#stopChild(child).then(() => {
+      if (this.child === child) this.child = null;
+      this.#setState("stopped", { url: null, external: false, ownership: null, guest: null });
+    }).catch((error) => {
+      this.#setState("error", { lastError: error.message });
+      throw error;
+    }).finally(() => {
+      if (this.stopRun?.promise === promise) this.stopRun = null;
+    });
+    this.stopRun = { child, promise };
+    return promise;
   }
 
   async restart(settings) {
