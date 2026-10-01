@@ -111,11 +111,24 @@ describe("desktop app lifecycle", () => {
     const preparing = coordinator.prepareForUpdateInstall();
     releaseStop();
     await assert.rejects(preparing, /boom/);
-    assert.deepEqual(calls, ["stop", "dispose"]);
+    assert.deepEqual(calls, ["stop", "dispose", "start"], "failed drain recovers the server");
     let prevented = 0;
     app.emit("before-quit", { preventDefault: () => { prevented += 1; } });
     assert.equal(prevented, 1, "back to running: a normal quit drains the server again");
     releaseStop();
+  });
+
+  it("a rejected server stop aborts the install and recovers the server", async () => {
+    const { app, calls, coordinator, supervisor } = fixture();
+    (supervisor as { stop: () => Promise<void> }).stop = async () => {
+      calls.push("stop");
+      throw new Error("drain failed");
+    };
+    await assert.rejects(coordinator.prepareForUpdateInstall(), /drain failed/);
+    assert.deepEqual(calls, ["stop", "start"], "no dispose, no install path — the server comes back");
+    let prevented = 0;
+    app.emit("before-quit", { preventDefault: () => { prevented += 1; } });
+    assert.equal(prevented, 1, "lifecycle is running again, not stuck in update states");
   });
 });
 

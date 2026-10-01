@@ -10,7 +10,7 @@ import { ServerSupervisor } from "../desktop/lib/server.mjs";
 // devlog/_plan/260929_background_runtime/030 + 040: the supervisor asks the
 // bundled CLI first, and restarts only a bundled child that crashed.
 
-type Child = EventEmitter & { pid: number; stdout: PassThrough; stderr: PassThrough; exitCode: number | null; kill: () => boolean; env: Record<string, string> };
+type Child = EventEmitter & { pid: number; stdout: PassThrough; stderr: PassThrough; exitCode: number | null; signalCode: string | null; kill: () => boolean; env: Record<string, string> };
 
 const SETTINGS = { port: 3333, existingServer: "ask", nodeBinary: "/fake/node", configDir: "", devLogging: false };
 const statusRun = (doc: Record<string, unknown>, code: number) => ({ code, stdout: JSON.stringify({ schema: "ima2-status/1", manager: { state: "absent" }, serviceOwnership: "unmanaged", stoppable: false, runtime: null, ...doc }), stderr: "" });
@@ -23,7 +23,7 @@ function harness(cliAnswers: Array<{ code: number | null; stdout: string; stderr
   const children: Child[] = [];
   const cliCalls: string[][] = [];
   const spawnFn = (_bin: string, _args: string[], opts: { env: Record<string, string> }) => {
-    const c = Object.assign(new EventEmitter(), { pid: 9000 + children.length, stdout: new PassThrough(), stderr: new PassThrough(), exitCode: null, kill: () => true, env: opts.env }) as Child;
+    const c = Object.assign(new EventEmitter(), { pid: 9000 + children.length, stdout: new PassThrough(), stderr: new PassThrough(), exitCode: null, signalCode: null, kill: () => true, env: opts.env }) as Child;
     children.push(c);
     return c;
   };
@@ -40,6 +40,7 @@ function harness(cliAnswers: Array<{ code: number | null; stdout: string; stderr
 
 function exit(c: Child, code: number | null, signal: string | null = null) {
   c.exitCode = code;
+  c.signalCode = signal;
   c.stdout.end();
   c.stderr.end();
   c.emit("exit", code, signal);
@@ -229,6 +230,39 @@ describe("ServerSupervisor", () => {
 });
 
 describe("windows force-kill", () => {
+  it("tree-kills a live owned child when the graceful stop is unavailable", async () => {
+    const killed: number[] = [];
+    const h = harness([ABSENT], { killTreeFn: (pid: number) => { killed.push(pid); return true; } });
+    try {
+      const c = await running(h);
+      const stopping = h.sup.stop();
+      await tick();
+      assert.deepEqual(killed, [c.pid]);
+      exit(c, 0);
+      await stopping;
+      await tick(); // #afterStdout defers #onExit's log write past stop()'s resolve
+      assert.equal(h.sup.state, "stopped");
+    } finally {
+      await h.cleanup();
+    }
+  });
+
+  it("never tree-kills a stale pid when the child exits during the admin stop", async () => {
+    const killed: number[] = [];
+    const h = harness([ABSENT], { killTreeFn: (pid: number) => { killed.push(pid); return true; }, stopGraceMs: 30 });
+    try {
+      const c = await running(h);
+      const stopping = h.sup.stop();
+      exit(c, 0); // exits while requestAdminStop is still in flight
+      await stopping;
+      await tick(80); // the armed force timer must have been disarmed
+      assert.deepEqual(killed, [], "no late tree-kill at a possibly reused pid");
+      assert.equal(h.sup.state, "stopped");
+    } finally {
+      await h.cleanup();
+    }
+  });
+
   it("tree-kills the owned server on Windows and hides every spawned console", () => {
     const source = readFileSync("desktop/lib/server.mjs", "utf8");
     assert.match(source, /taskkill", \["\/PID", String\(pid\), "\/T", "\/F"\]/);

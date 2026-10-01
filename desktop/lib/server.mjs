@@ -105,9 +105,9 @@ export function resolveNodeCommand({ nodeBinary, isPackaged }) {
  * a bundled child that crashed, never one that was stopped on request.
  */
 export class ServerSupervisor extends EventEmitter {
-  constructor({ rootDir, logFile, isPackaged, origin = "user", askTakeover = null, spawnFn = spawn, runCli = null, probe = probeListener }) {
+  constructor({ rootDir, logFile, isPackaged, origin = "user", askTakeover = null, spawnFn = spawn, runCli = null, probe = probeListener, killTreeFn = killProcessTree, stopGraceMs = STOP_GRACE_MS }) {
     super();
-    Object.assign(this, { rootDir, logFile, isPackaged, origin, spawnFn, probe });
+    Object.assign(this, { rootDir, logFile, isPackaged, origin, spawnFn, probe, killTreeFn, stopGraceMs });
     this.askTakeover = askTakeover ?? (async () => ({ approve: false }));
     this.checkCli = !runCli;
     this.runCli = runCli ?? ((args, settings) => runBundledCli({
@@ -334,14 +334,24 @@ export class ServerSupervisor extends EventEmitter {
     }
     const graceful = await requestAdminStop(child.pid, this.configDir, (line) => this.#log(line));
     await new Promise((resolve) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(force);
+        resolve();
+      };
       const force = setTimeout(() => {
-        if (!killProcessTree(child.pid)) { try { child.kill("SIGKILL"); } catch { /* best-effort: child may already have exited */ } }
-      }, STOP_GRACE_MS);
-      child.once("exit", () => { clearTimeout(force); resolve(); });
-      if (child.exitCode !== null) return resolve();
+        // The child may have exited while requestAdminStop was in flight —
+        // never tree-kill a pid we can no longer prove is our server.
+        if (settled || child.exitCode !== null || child.signalCode !== null) return;
+        if (!this.killTreeFn(child.pid)) { try { child.kill("SIGKILL"); } catch { /* best-effort: child may already have exited */ } }
+      }, this.stopGraceMs);
+      child.once("exit", finish);
+      if (child.exitCode !== null || child.signalCode !== null) return finish();
       if (!graceful) {
-        if (killProcessTree(child.pid)) return;
-        try { child.kill("SIGTERM"); } catch { resolve(); }
+        if (this.killTreeFn(child.pid)) return; // the exit event resolves
+        try { child.kill("SIGTERM"); } catch { finish(); }
       }
     });
     this.child = null;

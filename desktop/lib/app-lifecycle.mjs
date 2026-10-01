@@ -40,11 +40,19 @@ export function wireAppLifecycle(options) {
       if (state !== "running") return false;
       state = "update-preparing";
       try {
-        await stopAndDispose(supervisor, logger);
+        // Unlike the quit drain, an update must never proceed past a failed stop.
+        await supervisor.stop();
+        supervisor.dispose();
       } catch (error) {
-        // "update-preparing" still intercepts before-quit; a failed drain must not
-        // leave the app unable to quit normally.
+        // "update-preparing" still intercepts before-quit — go back to running
+        // and bring back whatever the drain left instead of wedging the app.
         state = "running";
+        try {
+          await supervisor.start(settingsStore.get());
+        } catch (restartError) {
+          const message = restartError instanceof Error ? restartError.message : String(restartError);
+          logger.error(`[desktop] server restart after failed update drain: ${message}`);
+        }
         throw error;
       }
       state = "update-install";
