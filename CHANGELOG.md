@@ -7,9 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.26.1] - 2026-10-02
+
 ### Fixed
 
 - **Desktop update checks find their manifests** — installed apps ask the release GitHub marks Latest, which is the npm release `vX.Y.Z`, for `latest-mac.yml`, but the manifests lived only in `desktop-vX.Y.Z`, so every check ended in a 404 ("Unable to check for updates"). The desktop workflow now copies `latest*.yml` into `vX.Y.Z` with file paths that point at the desktop release assets (`scripts/mirror-desktop-update-manifests.mjs`), which also lets apps from 3.23–3.26 update without a new build.
+- **Start hidden applies only at login** — the desktop app used to hide its window on every launch when Start hidden was on. Now only a login launch stays in the menu bar or tray; opening ima2 yourself always shows the window, and a login relaunch of a running app no longer raises it. (#365)
+- **Closing the window keeps the server and frees the renderer** — with Keep running on close, closing the window now destroys it instead of hiding it; the server keeps running in the tray and *Open ima2* recreates a window on the live server. *Open ima2* stays available when the server is stopped or failed, because the window offers Start, Restart and the server log. A crashed or killed window reloads itself up to three times a minute. (#365)
+- **A failed update install no longer leaves ima2 without a server** — if the installer does not start (an error from the updater, a thrown install call, or, on Windows and Linux, no exit within 15 seconds), the app restarts the server it stopped and shows a retryable error. A quit that was cancelled during update preparation no longer disables the updater. (#365)
+- **Stopping the server on Windows** — the desktop app ends the whole server process tree (`taskkill /T /F`) and a stop that cannot end the server reports an error after a bounded wait instead of hanging quit or an update. `ima2 stop` and the desktop app now run the server's own shutdown on Windows too (OAuth helper, MCP connections, database), which a self-sent SIGTERM skipped. (#365)
 
 ## [3.26.0] - 2026-09-30
 

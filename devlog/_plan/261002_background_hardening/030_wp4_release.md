@@ -1,5 +1,10 @@
 # 030 wp4 — patch release and outcome
 
+0. (P amendment, wp4) CHANGELOG is not touched by release.yml or scripts/release.mjs
+   (`rg -n "Unreleased|CHANGELOG" .github/workflows scripts` finds nothing); earlier cuts
+   were manual PRs (#352). Cut `## [3.26.1] - 2026-10-02` from `[Unreleased]` plus the
+   #365 background-mode entries in a docs-only PR to dev, merge it after PR fast gate,
+   then release from that dev head.
 1. Preconditions: dev CI green (020 step 5); local `main`/`dev` refs fetched; `gh api repos/lidge-ai/ima2-gen --jq .permissions.admin` is true (desktop tag ruleset requires admin).
 2. No `--dry-run` step: scripts/release.mjs:417 runs `ensurePromoted` (which merges the promotion PR, :251) before it reads `--dry-run`, so a "dry run" with `--promote` is a real promotion (audit B5). The real run below is user-authorized. Follow-up recorded in 040: make `--dry-run` skip the promotion merge.
 3. Run: `npm run release -- patch --promote --approve --yes` from a clean checkout of dev (scripts/release.mjs). It merges the promotion PR, dispatches release.yml on that main sha, approves npm-stable and desktop-production, pushes desktop-v3.26.1, and watches until the desktop release publishes. If it stops after the tag: `npm run release -- resume 3.26.1 --approve`.
