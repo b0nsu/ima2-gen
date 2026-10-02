@@ -386,3 +386,41 @@ jobs:
             exit 1
           fi
           gh release edit "$DESKTOP_TAG" --draft=false --latest=false
+
+  mirror_update_manifests:
+    name: Mirror update manifests into the npm release
+    needs: publish_release
+    # Installed apps read latest*.yml from the release GitHub marks Latest, which is the npm
+    # release vX.Y.Z by contract; desktop-v* stays --latest=false. Copy the manifests there with
+    # paths into this desktop release (scripts/mirror-desktop-update-manifests.mjs).
+    if: startsWith(github.ref, 'refs/tags/desktop-v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24.17.0'
+      - name: Mirror desktop update manifests into vX.Y.Z
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          DESKTOP_TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          VERSION="${DESKTOP_TAG#desktop-v}"
+          # The npm stable publish creates vX.Y.Z; the desktop build runs beside it.
+          for attempt in $(seq 1 80); do
+            gh release view "v$VERSION" --json tagName >/dev/null 2>&1 && break
+            sleep 30
+          done
+          if ! gh release view "v$VERSION" --json tagName >/dev/null 2>&1; then
+            echo "Release v$VERSION did not appear; rerun this job once the npm stable publish created it." >&2
+            exit 1
+          fi
+          mkdir desktop-manifests mirrored-manifests
+          gh release download "$DESKTOP_TAG" --dir desktop-manifests --pattern 'latest*.yml'
+          node scripts/mirror-desktop-update-manifests.mjs desktop-manifests mirrored-manifests "$DESKTOP_TAG"
+          gh release upload "v$VERSION" mirrored-manifests/*.yml --clobber

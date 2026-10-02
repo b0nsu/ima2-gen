@@ -13,6 +13,7 @@ import {
 } from "../lib/processControl.js";
 import { registerAdminRoutes } from "../routes/admin.js";
 import { createTestRuntimeContext } from "../lib/runtimeContext.js";
+import type { ShutdownReason } from "../bin/lib/platform.js";
 
 // devlog/_plan/260821_260821c-stop-service-commands/010: the stop sequence must
 // never kill a pid the advertise file merely claims. Identity is verified
@@ -145,11 +146,14 @@ describe("corroborateByStartTime", () => {
 });
 
 describe("POST /api/admin/stop gates", () => {
-  async function withServer(fn: (base: string, nonce: string) => Promise<void>): Promise<void> {
+  async function withServer(
+    fn: (base: string, nonce: string) => Promise<void>,
+    shutdown?: (reason: ShutdownReason) => void | Promise<void>,
+  ): Promise<void> {
     const app = express();
     const ctx = createTestRuntimeContext();
     (ctx as { adminNonce: string }).adminNonce = "nonce-under-test";
-    registerAdminRoutes(app, ctx);
+    registerAdminRoutes(app, ctx, shutdown ? { shutdown } : undefined);
     const server = app.listen(0, "127.0.0.1");
     await new Promise((r) => server.once("listening", r));
     const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -183,28 +187,25 @@ describe("POST /api/admin/stop gates", () => {
   });
 
   test("the correct nonce without an Origin is accepted with 202", async () => {
-    // Intercept the self-signal so the test process does not shut down.
-    const originalKill = process.kill.bind(process);
     const originalWrite = process.stdout.write.bind(process.stdout);
     const intents: string[] = [];
+    const sequence: string[] = [];
     // Capture the stop-intent line (and keep it out of the test output).
     (process.stdout as { write: unknown }).write = ((chunk: unknown, ...rest: unknown[]) => {
       if (String(chunk).startsWith("IMA2_STOP_INTENT ")) {
         intents.push(String(chunk));
+        sequence.push("intent");
         const cb = rest.find((x) => typeof x === "function") as (() => void) | undefined;
         cb?.();
         return true;
       }
       return (originalWrite as (...a: unknown[]) => boolean)(chunk, ...rest);
     }) as typeof process.stdout.write;
-    let signalled: string | number | undefined;
-    (process as { kill: typeof process.kill }).kill = ((pid: number, sig?: string | number) => {
-      if (pid === process.pid && sig === "SIGTERM") {
-        signalled = sig;
-        return true;
-      }
-      return originalKill(pid, sig as never);
-    }) as typeof process.kill;
+    const reasons: string[] = [];
+    const shutdown = (reason: ShutdownReason) => {
+      reasons.push(reason);
+      sequence.push("shutdown");
+    };
     try {
       await withServer(async (base, nonce) => {
         const r = await fetch(`${base}/api/admin/stop`, {
@@ -214,15 +215,14 @@ describe("POST /api/admin/stop gates", () => {
         assert.equal(r.status, 202);
         const body = (await r.json()) as { stopping?: boolean };
         assert.equal(body.stopping, true);
-        // the self-signal is deferred via setImmediate
+        // shutdown is deferred until the stop-intent write flushes
         await new Promise((r2) => setTimeout(r2, 50));
-        assert.equal(signalled, "SIGTERM");
-        // ...and follows the stop-intent line the desktop supervisor reads.
+        assert.deepEqual(reasons, ["admin"]);
+        assert.deepEqual(sequence, ["intent", "shutdown"]);
         assert.equal(intents.length, 1);
         assert.match(intents[0]!, /^IMA2_STOP_INTENT \S+\n$/);
-      });
+      }, shutdown);
     } finally {
-      (process as { kill: typeof process.kill }).kill = originalKill;
       (process.stdout as { write: unknown }).write = originalWrite;
     }
   });

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 import { wireAppLifecycle } from "../desktop/lib/app-lifecycle.mjs";
 
@@ -9,16 +10,18 @@ class FakeApp extends EventEmitter {
   exit(code: number) { this.calls.push(`exit:${code}`); }
 }
 
-function fixture() {
+function fixture({ now = Date.now, onQuitCommitted = () => {}, onMarkQuitting = () => {} } = {}) {
   const app = new FakeApp();
   const calls: string[] = [];
   let releaseStop: (() => void) | null = null;
   const supervisor = {
+    start: async () => { calls.push("start"); },
     stop: () => new Promise<void>((resolve) => { calls.push("stop"); releaseStop = resolve; }),
     dispose: () => calls.push("dispose"),
   };
   const windows = {
     showMain: () => calls.push("show"),
+    markQuitting: onMarkQuitting,
     closeAllForQuit: () => calls.push("close"),
   };
   const settingsStore = { get: () => ({ keepRunningOnClose: false }) };
@@ -28,9 +31,11 @@ function fixture() {
     windows,
     settingsStore,
     applyDockVisibility: () => calls.push("dock"),
+    onQuitCommitted,
+    now,
     logger: { error: (value: unknown) => calls.push(`error:${String(value)}`) },
   });
-  return { app, calls, coordinator, releaseStop: () => releaseStop?.() };
+  return { app, calls, coordinator, supervisor, releaseStop: () => releaseStop?.() };
 }
 
 describe("desktop app lifecycle", () => {
@@ -47,6 +52,19 @@ describe("desktop app lifecycle", () => {
     await new Promise((resolve) => setImmediate(resolve));
     assert.deepEqual(calls, ["close", "stop", "dispose"]);
     assert.deepEqual(app.calls, ["exit:0"]);
+  });
+
+  it("commits a repeated normal quit only once", () => {
+    let commits = 0;
+    const { app, calls } = fixture({ onQuitCommitted: () => { commits += 1; } });
+    const event = { preventDefault() {} };
+
+    app.emit("before-quit", event);
+    app.emit("before-quit", event);
+
+    assert.equal(commits, 1);
+    assert.equal(calls.filter((call) => call === "close").length, 1);
+    assert.equal(calls.filter((call) => call === "stop").length, 1);
   });
 
   it("blocks incidental quit while preparing an update then allows updater quit", async () => {
@@ -68,9 +86,151 @@ describe("desktop app lifecycle", () => {
     assert.deepEqual(app.calls, []);
   });
 
+  it("does not commit a vetoed quit while an update is preparing", async () => {
+    let commits = 0;
+    const { app, coordinator, releaseStop } = fixture({ onQuitCommitted: () => { commits += 1; } });
+    const preparing = coordinator.prepareForUpdateInstall();
+
+    app.emit("before-quit", { preventDefault() {} });
+    assert.equal(commits, 0);
+
+    releaseStop();
+    await preparing;
+  });
+
+  it("marks quitting before committing an updater pass-through exactly once", async () => {
+    const order: string[] = [];
+    const { app, coordinator, releaseStop } = fixture({
+      onMarkQuitting: () => order.push("mark"),
+      onQuitCommitted: () => order.push("commit"),
+    });
+    const preparing = coordinator.prepareForUpdateInstall();
+    releaseStop();
+    await preparing;
+
+    app.emit("before-quit", { preventDefault() {} });
+    app.emit("before-quit", { preventDefault() {} });
+    assert.deepEqual(order, ["mark", "commit"]);
+  });
+
   it("runs the existing window-close policy while idle", () => {
     const { app } = fixture();
     app.emit("window-all-closed");
     assert.deepEqual(app.calls, ["quit"]);
+  });
+
+  it("opens the window on a manual relaunch but not on a login relaunch", () => {
+    const { app, calls } = fixture();
+    app.emit("second-instance", {}, ["ima2", "--autostart"]);
+    assert.deepEqual(calls, []);
+    app.emit("second-instance", {}, ["ima2"]);
+    assert.deepEqual(calls, ["show"]);
+  });
+
+  it("recovers to running when an update install is aborted", async () => {
+    const { app, calls, coordinator, releaseStop } = fixture();
+    const preparing = coordinator.prepareForUpdateInstall();
+    releaseStop();
+    assert.equal(await preparing, true);
+    // The installer handoff never happened: the app must come back with its
+    // server instead of sitting drained (opencodex's abort_restart).
+    await coordinator.abortUpdateInstall();
+    assert.deepEqual(calls, ["stop", "dispose", "start"]);
+    let prevented = 0;
+    app.emit("before-quit", { preventDefault: () => { prevented += 1; } });
+    assert.equal(prevented, 1, "lifecycle is running again and intercepts quit");
+    await coordinator.abortUpdateInstall();
+    assert.deepEqual(calls, ["stop", "dispose", "start", "close", "stop"], "second abort is a no-op");
+    releaseStop();
+  });
+
+  it("consumes a queued updater quit veto once, then drains a user quit", async () => {
+    let now = 1_000;
+    let commits = 0;
+    const { app, calls, coordinator, releaseStop } = fixture({
+      now: () => now,
+      onQuitCommitted: () => { commits += 1; },
+    });
+    const preparing = coordinator.prepareForUpdateInstall();
+    releaseStop();
+    await preparing;
+    await coordinator.abortUpdateInstall({ vetoQueuedQuit: true });
+
+    let prevented = 0;
+    app.emit("before-quit", { preventDefault: () => { prevented += 1; } });
+    assert.equal(commits, 0);
+    assert.equal(calls.filter((call) => call === "stop").length, 1);
+
+    now += 1;
+    app.emit("before-quit", { preventDefault: () => { prevented += 1; } });
+    assert.equal(prevented, 2);
+    assert.equal(commits, 1);
+    assert.equal(calls.filter((call) => call === "stop").length, 2);
+    releaseStop();
+  });
+
+  it("expires the queued updater quit veto after two seconds", async () => {
+    let now = 5_000;
+    let commits = 0;
+    const { app, coordinator, releaseStop } = fixture({
+      now: () => now,
+      onQuitCommitted: () => { commits += 1; },
+    });
+    const preparing = coordinator.prepareForUpdateInstall();
+    releaseStop();
+    await preparing;
+    await coordinator.abortUpdateInstall({ vetoQueuedQuit: true });
+
+    now += 2_000;
+    app.emit("before-quit", { preventDefault() {} });
+
+    assert.equal(commits, 1);
+    releaseStop();
+  });
+
+  it("a failed install drain does not wedge the app between quit-able states", async () => {
+    const { app, calls, coordinator, supervisor, releaseStop } = fixture();
+    let boom = true;
+    (supervisor as { dispose: () => void }).dispose = () => {
+      calls.push("dispose");
+      if (boom) { boom = false; throw new Error("boom"); }
+    };
+    const preparing = coordinator.prepareForUpdateInstall();
+    releaseStop();
+    await assert.rejects(preparing, /boom/);
+    assert.deepEqual(calls, ["stop", "dispose", "start"], "failed drain recovers the server");
+    let prevented = 0;
+    app.emit("before-quit", { preventDefault: () => { prevented += 1; } });
+    assert.equal(prevented, 1, "back to running: a normal quit drains the server again");
+    releaseStop();
+  });
+
+  it("a rejected server stop aborts the install and recovers the server", async () => {
+    const { app, calls, coordinator, supervisor } = fixture();
+    (supervisor as { stop: () => Promise<void> }).stop = async () => {
+      calls.push("stop");
+      throw new Error("drain failed");
+    };
+    await assert.rejects(coordinator.prepareForUpdateInstall(), /drain failed/);
+    assert.deepEqual(calls, ["stop", "start"], "no dispose, no install path — the server comes back");
+    let prevented = 0;
+    app.emit("before-quit", { preventDefault: () => { prevented += 1; } });
+    assert.equal(prevented, 1, "lifecycle is running again, not stuck in update states");
+  });
+});
+
+describe("desktop background-mode wiring", () => {
+  it("scopes startHidden to login launches only", () => {
+    const main = readFileSync("desktop/main.mjs", "utf8");
+    assert.match(main, /startHiddenAtLogin = \w+\.startHidden && origin === "login"/);
+    assert.match(main, /if \(!startHiddenAtLogin\) windows\.showMain\(\)/);
+    assert.ok(!main.includes("!settingsStore.get().startHidden) windows.showMain"));
+  });
+
+  it("keeps the tray Open action reachable when the server is down", () => {
+    const tray = readFileSync("desktop/lib/tray.mjs", "utf8");
+    assert.match(tray, /label: "Open ima2", click: \(\) => this\.actions\.openApp\(\) \}/);
+    const popup = readFileSync("desktop/pages/tray.js", "utf8");
+    assert.ok(!popup.includes('$("open").disabled'));
   });
 });

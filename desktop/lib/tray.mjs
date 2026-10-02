@@ -108,7 +108,9 @@ export class TrayController {
       { label: this.statusLine(), enabled: false },
       { type: "separator" },
       { label: "Show Status", click: () => this.actions.showTrayPopup?.(this.bounds()) },
-      { label: "Open ima2", click: () => this.actions.openApp(), enabled: running || this.status.state === "starting" },
+      // Always reachable: the window doubles as the recovery surface (loading page
+      // shows Start/Restart and Open Server Log when the server is not running).
+      { label: "Open ima2", click: () => this.actions.openApp() },
       { label: "Open in Browser", click: () => this.actions.openInBrowser(), enabled: running },
       { label: "Open Generated Folder", click: () => this.actions.openGenerated() },
       { type: "separator" },
