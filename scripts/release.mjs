@@ -231,6 +231,10 @@ async function ensurePromoted(ctx) {
   ctx.run("git", ["fetch", "origin", "main", "dev", "--tags"]);
   const ahead = Number(ctx.run("git", ["rev-list", "--count", "origin/main..origin/dev"]));
   if (ahead === 0) return;
+  if (ctx.flags.has("--dry-run")) {
+    ctx.log("Dry-run requires dev to be promoted already; refusing to create or merge a promotion PR.");
+    throw new ExitError(2);
+  }
   if (!ctx.flags.has("--promote")) {
     ctx.log("origin/dev is " + ahead + " commit(s) ahead of origin/main.");
     ctx.log("Promote first:  npm run release -- " + ctx.bump + " --promote");
@@ -317,8 +321,8 @@ function ownRuns(ctx, workflow) {
 }
 
 async function checkApprovals(ctx, approvals) {
-  // Dry modes change no remote state, so there are no publish/desktop runs to
-  // approve; the release.yml run itself has no protected environment.
+  // Dry/canary modes create no publish/desktop runs to approve; the release.yml
+  // validation run itself has no protected environment.
   if (dryRunInput(ctx.flags) !== "false") return;
   await approvePending(ctx, approvals, "release.yml", ctx.releaseId);
   for (const workflow of ["publish.yml", "desktop.yml"]) {

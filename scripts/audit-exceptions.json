@@ -12,7 +12,7 @@
       "package": "braces",
       "scope": "root",
       "reason": "Unreachable vulnerable pattern parsing: the sole production trash caller passes glob:false; real installed trash regression and a positive control verify the glob boundary. Maintainers revalidate on dependency/caller changes and before expiry.",
-      "evidence": "tests/system-trash-glob-safety.test.ts; tests/audit-trash-graph-contract.test.ts; tests/audit-gate-contract.test.ts; devlog/_plan/261003-issue-pr-release/012_security-evidence.md; trash10.1.1/globby14.1.0/fast-glob3.3.3/micromatch4.0.8/braces3.0.3",
+      "evidence": "tests/system-trash-glob-safety.test.ts; tests/audit-trash-graph-contract.test.ts; tests/audit-gate-contract.test.ts; https://github.com/lidge-ai/ima2-gen/blob/055f9cd0e6ceb839d51ce4179922c667a6ef0969/devlog/_plan/261003-issue-pr-release/012_security-evidence.md; trash10.1.1/globby14.1.0/fast-glob3.3.3/micromatch4.0.8/braces3.0.3",
       "expires": "2026-10-17T00:00:00.000Z"
     }
   ]
