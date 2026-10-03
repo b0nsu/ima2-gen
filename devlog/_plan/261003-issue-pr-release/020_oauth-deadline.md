@@ -1,13 +1,13 @@
 # 020 — One deadline for a GPT OAuth image job (#351)
 
-Status: proposed design for independent architecture audit; implementation and tests NOT executed.
+Status: implementation in progress. The approved [023 consumer amendment](023_timeout-consumers.md) supersedes ALL whole-job timeout codes and the initial boolean abort-constructor sketch below: job deadlines use OAUTH_IMAGE_TIMEOUT; standalone request timeouts retain RESPONSES_IMAGE_TIMEOUT. API preservation and local persistence boundaries remain mandatory.
 Date: 2026-10-03. Baseline: origin/dev `862e0bd73f59a3b419503a9dec39b6f83ef2bed6`, verified with `git ls-remote`.
 Issue: https://github.com/lidge-ai/ima2-gen/issues/351 (OPEN, no comments at inspection).
 This document alone is the delegated write scope. Main owns roadmap, git, FSM, delivery and other docs.
 
 ## Outcome and scope
 
-Bound planner, planner retry, every render and rate-limit waits by one deadline created at `runOAuthImageJob` entry. An elapsed deadline is 504 / `RESPONSES_IMAGE_TIMEOUT`; user cancellation remains 499 / `GENERATION_CANCELED`. Readiness waits must also observe that signal. API-key and other providers retain their existing timeout policy. No paid provider calls are needed to implement or verify this unit.
+Bound planner, planner retry, every render and rate-limit waits by one deadline created at `runOAuthImageJob` entry. An elapsed job deadline is 504 / `OAUTH_IMAGE_TIMEOUT`; user cancellation remains 499 / `GENERATION_CANCELED`. Readiness waits must also observe that signal. API-key and other providers retain their existing timeout policy. No paid provider calls are needed to implement or verify this unit.
 
 | Action | Path | Purpose |
 |---|---|---|

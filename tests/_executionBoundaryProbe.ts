@@ -125,7 +125,11 @@ export function assertCall(call: Call, ctx: RuntimeContext, request: ImageExecut
   const prefix = (surface === "edit" && !responses && !provider.startsWith("grok"))
     || (surface === "node" && request.sourceImage && ["agy", "gemini-api", "atlascloud", "minimax"].includes(provider));
   assert.equal(call.args[responses ? 1 : 0], `${prefix ? "Edit this image: " : ""}${prompt}`);
-  assert.equal(options.signal, request.signal);
+  if (provider === "oauth") {
+    assert.ok(options.signal instanceof AbortSignal);
+    assert.notEqual(options.signal, request.signal, "OAuth uses an invocation-local deadline signal");
+    assert.equal(options.signal.aborted, request.signal.aborted);
+  } else assert.equal(options.signal, request.signal);
   if (provider !== "agy") assert.equal(options.model, provider.startsWith("grok") && surface !== "node" ? "grok-imagine-image-2.0" : "grok-imagine-image-quality");
   if (provider !== "agy" && !responses) assert.equal(options.size, "1536x1024");
   if (responses) {

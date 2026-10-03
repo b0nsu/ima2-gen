@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { collectCallArguments } from "./_executionImportEdges.mjs";
 import { readStoreBundle } from "./_storeBundle.mjs";
 
 const root = process.cwd();
@@ -21,7 +22,15 @@ test("inflight cancel is wired to AbortController, not just terminal bookkeeping
   assert.match(inflight, /controller\.abort\(\)/);
   assert.match(health, /abortJob\(req\.params\.requestId\)/);
   assert.match(transport, /export interface PostResponsesArgs\s*\{[^}]*signal\?: AbortSignal \| null/);
-  assert.match(transport, /signal:\s*fetchSignal/);
+  const owner = "lib/responsesTransport.ts";
+  assert.deepEqual(collectCallArguments(transport, owner, "transportLifetime", "postResponses"), [["ctx", "provider", "signal"]]);
+  const requests = collectCallArguments(transport, owner, "requestResponses", "postResponses");
+  assert.equal(requests.length, 1);
+  assert.match(requests[0][2], /signal:\s*lifetime\.signal/);
+  const oauthLifetimes = collectCallArguments(transport, owner, "createOAuthRequestDeadline", "transportLifetime");
+  assert.equal(oauthLifetimes.length, 1);
+  assert.equal(oauthLifetimes[0][1], "parent");
+  assert.deepEqual(collectCallArguments(transport, owner, "combineAbortSignals", "transportLifetime"), [["[controller.signal, parent]"]]);
   assert.match(transport, /code: "GENERATION_CANCELED"/);
 });
 

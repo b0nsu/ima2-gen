@@ -51,3 +51,15 @@ Architect reflection: ARCH-01..07 ALIGNED. Main folded four 030/010 clarity corr
 ## wp0 roadmap closeout
 
 Independent reviewer 01a10217-edfa-7812-9645-9a3a2bcf1560: VERDICT PASS, no roadmap blockers. Accepted synthesis: API-key persistence must remain un-raced; wp2 requires named activation fixtures before B, wp1 must resolve applicable high advisories, wp3 must execute rendered matrix, wp4 must verify actual publication. This docs-only cycle locks the roadmap; no production code has changed. Next direction is dependency/remediation wp1, with root remedy resolved in P before implementation. Existing baseline green tests did not test the newly proposed deadline and do not prove a fix.
+
+## wp1 closeout
+
+PR #369 merged to dev as be63eb0ece2a5c16ef53100453e3675b9a723f52 after PR Fast Gate run 37129880344 (pull_request, attempt1, head055f9cd0, merge-ref fa449b8319549051e0fc941018510814a2010ddf) completed all four jobs successfully; CodeQL37129880348 and screenshot gate succeeded. Independent implementation reviewer 01a10228-446d-7922-b08e-dc37202c4fa4: PASS, zero blockers. No unresolved review threads after merge.
+
+Local full suite:4131 total,4128 pass,3skip,0fail. Hosted backend:4131 total,4127pass,4skip,0fail (runner ffmpeg coverage differs). Typechecks, lint0errors/92warnings, runtime/UI builds, native-deps, inventory, install policy and audit gate pass. UI raw audit0; root retains5high under one evidence-backed unreachable-path exception expiring2026-10-17UTC, plus5moderate. This is not a clean raw root audit. Browser NodeCanvas drag/connect/selection, keyboard preview, panning at390px and real PNG+editable-memo PPTX export passed; console/pageerrors0 and teardown complete. PPTX SHA25635ecdd3cdcea1b7609e457165b0f27749d07b2bd0135321e953f045a9d1f5d6d; screenshot pr-assets d141618d. Native PowerPoint rendering and real trash OS operations were not tested.
+
+Initial full-suite failures exposed missing generated runtime JS, required cleanup retry options, and billing fixture socket reuse. Runtime build and scoped fixture corrections made the original suite green; no gate/threshold was weakened. Downgrading trash was rejected because platform fixes would be lost.
+
+Next direction: wp2 OAuth deadline from020 with API preservation and explicit remaining test fixtures. Post-merge dev CI37130901715, desktop37130901665, Agy37130901684 and CodeQL37130901676 were observed queued/running at be63eb0e; they remain mandatory before the next merge/release and are not claimed passed here. Source dependency slice itself is verified and merged.
+
+wp1 post-merge follow-through (2026-10-04 KST): CI37130901715 on be63eb0e (push,attempt1) completed SUCCESS with all eight jobs: changes, Ubuntu frontend E2E, Ubuntu Node22/npm11, Ubuntu Node24/npm12, Windows Node22/npm11, Windows Node24/npm12, macOS native installation, aggregateci. Agy37130901684, CodeQL37130901676 and desktop37130901665 also completed SUCCESS. Original #360–363 were closed as superseded after full carry, with source SHA/author attribution and #369 links.

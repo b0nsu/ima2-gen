@@ -1,3 +1,5 @@
+import { config } from "../../../config.js";
+import { createOAuthJobDeadline, normalizeOAuthTimeout, OAuthJobAbort, throwIfOAuthAborted } from "../../oauthJobDeadline.js";
 import type { RuntimeContext } from "../../runtimeContext.js";
 import { isNonRetryableGenerationError, normalizeGenerationFailure, type UpstreamErr } from "../../generationErrors.js";
 import { throwIfJobCanceled } from "../../generationCancel.js";
@@ -10,6 +12,28 @@ import type {
 
 export type OpenaiRequest = ImageExecutionRequest & { provider: "oauth" | "api" };
 
+/** One prepared OAuth operation owns its remaining budget across caller retries. */
+function withPreparedOAuthBudget<T>(ctx: RuntimeContext, request: OpenaiRequest,
+  run: (signal: AbortSignal) => Promise<T>): () => Promise<T> {
+  if (request.provider === "api") return () => run(request.signal);
+  let deadlineAt: number | undefined;
+  return async () => {
+    throwIfOAuthAborted(request.signal);
+    if (deadlineAt === undefined) {
+      const duration = normalizeOAuthTimeout(ctx.config?.oauth?.generationTimeoutMs ?? config.oauth.generationTimeoutMs);
+      deadlineAt = duration > 0 ? performance.now() + duration : Infinity;
+    }
+    const remaining = deadlineAt - performance.now();
+    if (remaining <= 0) throw new OAuthJobAbort("job-timeout");
+    const lifetime = createOAuthJobDeadline(remaining, request.signal);
+    try {
+      return await run(lifetime.signal);
+    } finally {
+      lifetime.dispose();
+    }
+  };
+}
+
 export function isOpenaiRequest(request: ImageExecutionRequest): request is OpenaiRequest {
   return request.provider === "oauth" || request.provider === "api";
 }
@@ -21,8 +45,9 @@ function prepareOpenaiClassic(
   const { provider: activeProvider, prompt: generationPrompt, requestId, background: backgroundParams } = request;
   const { model: imageModel, imageToolModel, quality, size: effectiveSize, moderation,
     mode: normalizedPromptMode, reasoningEffort, webSearchEnabled } = request.options;
-  // Scalars are captured at prepare; references, signal and ctx stay live per attempt.
-  const generateOne = async (): Promise<SingleImageExecutionResult> => {
+  // Scalars are captured at prepare; references and ctx stay live per attempt.
+  // API keeps the caller signal live; OAuth uses the invocation deadline signal.
+  const generateOne = async (signal: AbortSignal): Promise<SingleImageExecutionResult> => {
     const MAX_RETRIES = 1;
     let lastErr: unknown;
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
@@ -41,7 +66,7 @@ function prepareOpenaiClassic(
             model: imageModel, imageToolModel,
             reasoningEffort,
             webSearchEnabled,
-            signal: request.signal,
+            signal: activeProvider === "api" ? request.signal : signal,
             allowPromptOnlyOAuthFallback: activeProvider !== "api",
             ...(backgroundParams ? { background: backgroundParams.background } : {}),
             ...(backgroundParams?.outputFormat ? { outputFormat: backgroundParams.outputFormat } : {}),
@@ -65,9 +90,9 @@ function prepareOpenaiClassic(
       safetyMessage: "Content generation refused after retries",
     });
   };
-  return { execute: async () => {
-    return { kind: "single", value: await generateOne() };
-  } };
+  return { execute: withPreparedOAuthBudget(ctx, request, async (signal) => {
+    return { kind: "single" as const, value: await generateOne(signal) };
+  }) };
 }
 
 async function executeOpenaiNode(
@@ -128,14 +153,14 @@ export async function prepareOpenaiExecution(
 ): Promise<PreparedImageExecution<ExecutionSurface>> {
   switch (request.surface) {
     case "classic": return prepareOpenaiClassic(ctx, request, progress);
-    case "node": return { execute: async () => {
-      return { kind: "single", value: await executeOpenaiNode(ctx, request, progress) };
-    } };
-    case "edit": return { execute: async () => {
-      return { kind: "single", value: await executeOpenaiEdit(ctx, request) };
-    } };
-    case "multimode": return { execute: async () => {
-      return { kind: "sequence", value: await executeOpenaiMultimode(ctx, request, progress) };
-    } };
+    case "node": return { execute: withPreparedOAuthBudget(ctx, request, async (signal) => {
+      return { kind: "single" as const, value: await executeOpenaiNode(ctx, { ...request, signal }, progress) };
+    }) };
+    case "edit": return { execute: withPreparedOAuthBudget(ctx, request, async (signal) => {
+      return { kind: "single" as const, value: await executeOpenaiEdit(ctx, { ...request, signal }) };
+    }) };
+    case "multimode": return { execute: withPreparedOAuthBudget(ctx, request, async (signal) => {
+      return { kind: "sequence" as const, value: await executeOpenaiMultimode(ctx, { ...request, signal }, progress) };
+    }) };
   }
 }

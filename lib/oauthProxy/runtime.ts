@@ -1,3 +1,4 @@
+import { throwIfOAuthAborted, withOAuthAbort } from "../oauthJobDeadline.js";
 import { config } from "../../config.js";
 import { logEvent } from "../logger.js";
 import { isAbortError, makeOAuthError } from "./errors.js";
@@ -67,7 +68,8 @@ export function createOAuthGenerationTimeout(ctx: RouteRuntimeContext = {}, requ
   };
 }
 
-export async function waitForOAuthReady(ctx: RouteRuntimeContext = {}) {
+export async function waitForOAuthReady(ctx: RouteRuntimeContext = {}, signal?: AbortSignal | null) {
+  throwIfOAuthAborted(signal);
   if (!ctx || ctx.oauthReadyState === undefined) return;
   // A new login may have landed since the proxy started (or gave up), possibly from a CLI that
   // could not reach this server; restart onto the new session file first. Cheap: a few stats.
@@ -79,11 +81,18 @@ export async function waitForOAuthReady(ctx: RouteRuntimeContext = {}) {
   }
   const timeoutMs = ctx.config?.oauth?.statusTimeoutMs ?? config.oauth.statusTimeoutMs;
   if (ctx.oauthReadyPromise) {
-    await Promise.race([
-      ctx.oauthReadyPromise,
-      new Promise((resolve) => setTimeout(resolve, timeoutMs)),
-    ]);
+    const ready = ctx.oauthReadyPromise;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await withOAuthAbort(() => Promise.race([
+        ready,
+        new Promise<void>((resolve) => { timer = setTimeout(resolve, timeoutMs); }),
+      ]), signal);
+    } finally {
+      clearTimeout(timer);
+    }
   }
+  throwIfOAuthAborted(signal);
   const finalState = ctx.oauthReadyState;
   if (finalState !== "ready" && finalState !== "disabled") {
     throw makeOAuthError("OAuth proxy is not ready yet", { code: "OAUTH_UNAVAILABLE", status: 503 });
