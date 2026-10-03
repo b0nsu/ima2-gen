@@ -1,5 +1,7 @@
 # wp2 activation fixtures and API compatibility
 
+The approved 023 consumer amendment is authoritative for timeout identity: whole-job expiry is OAUTH_IMAGE_TIMEOUT504, standalone request/API timeout remains RESPONSES_IMAGE_TIMEOUT504.
+
 Consumes 020 on dev be63eb0e; production OAuth owners are unchanged from the initial baseline. Previous D: dependencies are verified and merged; next direction is one OAuth job deadline. Post-merge platform CI remains tracked before the next merge. This document concretizes the remaining 020 rows before B and supersedes its incorrect hypothetical first-error fixture ordering.
 
 ## Exact test ownership
@@ -56,3 +58,13 @@ Retain EVERY020 additional test, explicitly queued-fourth/no-new-call afterabort
 ## Independent A audit amendment
 
 Reviewer01a10240-30ec-7c03-8bb7-390950c02ed5 found the existing oauth-rate-limit-retry.test.ts pre-aborted non-rate-limit case contradicted the new entry guard. Accept and MODIFY that test explicitly: (a) signal aborted BEFORE invocation asserts GENERATION_CANCELED499 and request-call count0; (b) request enters, then aborts its parent and throws a non-rate-limit boom, asserting the original boom is preserved by the existing catch bypass. Both cases replace the ambiguous old pre-abort/boom expectation; no behavior assertion is dropped. Add this file to worker write scope. This clarifies tests for the already-approved flow, not a new production design decision.
+
+## Implementation split record (before file creation)
+
+Use NEW `tests/responses-api-abort-compat.test.ts` for the four cohesive API transport compatibility scenarios and standalone OAuth request-timer contract. Keep existing Responses safety cases untouched. The new OAuth job suite has the separately mocked backend and fake-clock job activation cases; mixing both isolation setups would complicate restoration and exceed the 500-line limit. Production function-length splits stay within current owners: `responsesTransport.ts` gets response-reading and lifetime/error helpers; `oauthImages.ts` gets render-slot startup and ordered collection helpers. No new production surface or scheduler is introduced.
+
+## Independent review / canonical-suite test repair
+
+Main authorized two additional existing source-contract tests after the full suite found stale implementation anchors. `tests/inflight-cancel-contract.test.ts` now traces the actual postResponses signal into transportLifetime, the resulting lifetime.signal into requestResponses, and both OAuth/API parent-signal producers. `tests/multimode-backend-contract.test.ts` now traces postResponses → readResponses with unchanged args/wait and then parseStream with onPartialImage/onFinalImage. No runtime source is changed to satisfy source text.
+
+Replace the classic test's unused progress callback/count assertion with actual runOAuthImageJob callbacks: `OAuth deadline awaits already-entered image persistence callback` holds persistence across deadline and proves pending→release→success; `late noncooperative render after deadline never invokes image callback` releases a late successful render after timeout and proves zero callback invocations. Both use entered barriers, fake clock and finally cleanup. The classic test retains meaningful upstream count1 and real classifier/normalizer assertions.
