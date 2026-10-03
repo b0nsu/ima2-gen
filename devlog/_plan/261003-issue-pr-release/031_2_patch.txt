@@ -1,0 +1,208 @@
+@@ -1268,9 +1266,20 @@
+       "reference": "仅作参考"
+     },
+     "voiceSection": "语音",
+-    "voiceLimit": "最多 {max} 个。在提示词中以 <AUDIO_0> 指代",
+-    "voiceNeeds15": "仅 grok-imagine-video-1.5 支持语音",
+-    "voiceCustomPlaceholder": "自定义语音 ID (/v1/custom-voices)"
++    "voiceLimit": "最多 {max} 个。请在提示词中用 <AUDIO_0> 引用",
++    "voiceNeeds15": "语音仅在 grok-imagine-video-1.5 支持",
++    "voiceCustomPlaceholder": "自定义语音 ID (/v1/custom-voices)",
++    "soundIntentTitle": "声音意图",
++    "soundIntentHelp": "无需上传音频文件，即可向提示词添加音乐/音效指令。",
++    "soundIntent": {
++      "noMusic": "无背景音乐",
++      "softBgm": "柔和 BGM",
++      "tenseMusic": "紧张音乐",
++      "roomTone": "环境声/房间底噪",
++      "sfx": "突出音效",
++      "noDialogue": "无对白",
++      "clear": "清除声音意图"
++    }
+   },
+   "sidebar": {
+     "appName": "图像生成器",
+diff --git a/ui/src/i18n/zh-Hant.json b/ui/src/i18n/zh-Hant.json
+index 6f2f44cd6..a79c6be2c 100644
+--- a/ui/src/i18n/zh-Hant.json
++++ b/ui/src/i18n/zh-Hant.json
+@@ -461,12 +461,10 @@
+     "afterBlocks": "主提示後",
+     "hint": "Ctrl+Enter 生成",
+     "dropHere": "拖曳到附件作為參考（最多 {max}）",
+-    "rejectNotMedia": "僅支援附加圖片、音訊和 mp4 檔案",
+-    "rejectAudioNeedsVideoModel": "音訊需要先選擇影片模型",
+-    "rejectAudioNeeds15": "僅 grok-imagine-video-1.5 支援音訊",
++    "rejectNotMedia": "僅支援附加圖片和 mp4 檔案",
++    "rejectAudioUploadUnsupported": "此處暫不支援上傳音訊檔案。請在影片設定中使用預設語音，或在提示詞中描述音樂/音效",
+     "rejectVideoNeedsBase": "僅 grok-imagine-video 支援影片輸入",
+     "rejectVideoSingleOnly": "一次只能使用一個來源影片",
+-    "audioUsePresetVoice": "xAI 僅對合作夥伴帳號開放音訊上傳，請在影片設定中使用預設語音",
+     "videoUseCliForEdit": "影片編輯與延長請使用 ima2 video edit / ima2 video extend"
+   },
+   "canvas": {
+@@ -1268,9 +1266,20 @@
+       "reference": "僅作參考"
+     },
+     "voiceSection": "語音",
+-    "voiceLimit": "最多 {max} 個。在提示詞中以 <AUDIO_0> 指稱",
+-    "voiceNeeds15": "僅 grok-imagine-video-1.5 支援語音",
+-    "voiceCustomPlaceholder": "自訂語音 ID (/v1/custom-voices)"
++    "voiceLimit": "最多 {max} 個。請在提示詞中用 <AUDIO_0> 引用",
++    "voiceNeeds15": "語音僅在 grok-imagine-video-1.5 支援",
++    "voiceCustomPlaceholder": "自訂語音 ID (/v1/custom-voices)",
++    "soundIntentTitle": "聲音意圖",
++    "soundIntentHelp": "無需上傳音訊檔案，即可向提示詞加入音樂/音效指令。",
++    "soundIntent": {
++      "noMusic": "無背景音樂",
++      "softBgm": "柔和 BGM",
++      "tenseMusic": "緊張音樂",
++      "roomTone": "環境聲/房間底噪",
++      "sfx": "突出音效",
++      "noDialogue": "無對白",
++      "clear": "清除聲音意圖"
++    }
+   },
+   "sidebar": {
+     "appName": "影像生成器",
+diff --git a/ui/src/lib/droppedMedia.ts b/ui/src/lib/droppedMedia.ts
+index 93091e339..e5f318861 100644
+--- a/ui/src/lib/droppedMedia.ts
++++ b/ui/src/lib/droppedMedia.ts
+@@ -1,6 +1,6 @@
+ // What the composer can accept depends on the mode the user is in, and the rules are
+-// not obvious: audio only reaches grok-imagine-video-1.5, video only reaches
+-// grok-imagine-video, and neither reaches the image lanes at all.
++// not obvious: video only reaches grok-imagine-video, while uploaded audio clips
++// are not actionable in the composer because xAI gates that capability upstream.
+ //
+ // This module exists because three surfaces (PromptComposer, Canvas, ImageNode) each
+ // filtered dropped files with their own `type.startsWith("image/")` check. Every one of
+@@ -11,14 +11,12 @@
+
+ export type DropRejection =
+   | "not-media"
+-  | "audio-needs-video-model"
+-  | "audio-needs-15"
++  | "audio-upload-unsupported"
+   | "video-needs-base"
+   | "video-single-only";
+
+ export interface SortedDrop {
+   images: File[];
+-  audios: File[];
+   videos: File[];
+   rejected: Array<{ file: File; reason: DropRejection }>;
+ }
+@@ -29,12 +27,6 @@ export interface DropContext {
+ }
+
+ const VIDEO_MODEL_BASE = "grok-imagine-video";
+-const VIDEO_MODEL_15 = "grok-imagine-video-1.5";
+-const VIDEO_15_ALIASES = new Set([
+-  VIDEO_MODEL_15,
+-  "grok-imagine-video-1.5-preview",
+-  "grok-imagine-video-1.5-2026-05-30",
+-]);
+
+ function isAudio(file: File): boolean {
+   return file.type.startsWith("audio/");
+@@ -55,9 +47,8 @@ function isVideo(file: File): boolean {
+  * a key string shown to the user.
+  */
+ export function sortDroppedByKind(files: File[], context: DropContext): SortedDrop {
+-  const sorted: SortedDrop = { images: [], audios: [], videos: [], rejected: [] };
++  const sorted: SortedDrop = { images: [], videos: [], rejected: [] };
+   const model = context.videoModelSelected;
+-  const is15 = typeof model === "string" && VIDEO_15_ALIASES.has(model);
+   const isBase = model === VIDEO_MODEL_BASE;
+
+   for (const file of files) {
+@@ -66,12 +57,10 @@ export function sortDroppedByKind(files: File[], context: DropContext): SortedDr
+       continue;
+     }
+     if (isAudio(file)) {
+-      // Preset voices are the supported path; an uploaded clip is gated to trusted
+-      // partners upstream. Both still require 1.5, which is the only model that
+-      // declares audio as an input modality.
+-      if (!model) sorted.rejected.push({ file, reason: "audio-needs-video-model" });
+-      else if (!is15) sorted.rejected.push({ file, reason: "audio-needs-15" });
+-      else sorted.audios.push(file);
++      // Uploaded clips appear to be supported by the 1.5 model spec, but xAI gates them
++      // to trusted partner accounts. Do not accept them as attachments until the request
++      // pipeline can actually consume them; point users to preset voices instead.
++      sorted.rejected.push({ file, reason: "audio-upload-unsupported" });
+       continue;
+     }
+     if (isVideo(file)) {
+@@ -96,7 +85,6 @@ export function sortDroppedByKind(files: File[], context: DropContext): SortedDr
+  */
+ export function composerAcceptAttr(context: DropContext): string {
+   const model = context.videoModelSelected;
+-  if (typeof model === "string" && VIDEO_15_ALIASES.has(model)) return "image/*,audio/*";
+   if (model === VIDEO_MODEL_BASE) return "image/*,video/mp4";
+   return "image/*";
+ }
+diff --git a/ui/src/lib/videoSoundIntent.ts b/ui/src/lib/videoSoundIntent.ts
+new file mode 100644
+index 000000000..756f07f56
+--- /dev/null
++++ b/ui/src/lib/videoSoundIntent.ts
+@@ -0,0 +1,55 @@
++import type { InsertedPrompt } from "../store/storeTypes";
++
++export const SOUND_INTENT_PROMPT_ID_PREFIX = "video-sound-intent:";
++
++export type VideoSoundIntentPreset = {
++  id: "no-music" | "soft-bgm" | "tense-music" | "room-tone" | "sfx" | "no-dialogue";
++  labelKey: string;
++  text: string;
++};
++
++export const VIDEO_SOUND_INTENT_PRESETS: VideoSoundIntentPreset[] = [
++  {
++    id: "no-music",
++    labelKey: "video.soundIntent.noMusic",
++    text: "no background music; use only natural scene sound and room tone",
++  },
++  {
++    id: "soft-bgm",
++    labelKey: "video.soundIntent.softBgm",
++    text: "soft cinematic background music, gentle ambience, no distracting sound effects",
++  },
++  {
++    id: "tense-music",
++    labelKey: "video.soundIntent.tenseMusic",
++    text: "subtle tense background music that builds emotion without overpowering the scene",
++  },
++  {
++    id: "room-tone",
++    labelKey: "video.soundIntent.roomTone",
++    text: "natural room tone and environmental sound only; keep the audio realistic",
++  },
++  {
++    id: "sfx",
++    labelKey: "video.soundIntent.sfx",
++    text: "emphasize clear synchronized sound effects that match the visible action",
++  },
++  {
++    id: "no-dialogue",
++    labelKey: "video.soundIntent.noDialogue",
++    text: "no dialogue or spoken words; communicate the moment through motion, music, and sound",
++  },
++];
++
++export function isVideoSoundIntentPrompt(id: string): boolean {
++  return id.startsWith(SOUND_INTENT_PROMPT_ID_PREFIX);
++}
++
++export function buildVideoSoundIntentPrompt(preset: VideoSoundIntentPreset): InsertedPrompt {
++  return {
++    id: `${SOUND_INTENT_PROMPT_ID_PREFIX}${preset.id}`,
++    name: `Sound: ${preset.id}`,
++    text: preset.text,
++    placement: "after",
++  };
++}
+
+```

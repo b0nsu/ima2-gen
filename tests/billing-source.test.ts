@@ -40,7 +40,7 @@ async function getJson(app, path): Promise<GetJsonResult> {
   try {
     return await new Promise<GetJsonResult>((resolve, reject) => {
       const req = request(
-        { hostname: "127.0.0.1", port, path, method: "GET" },
+        { hostname: "127.0.0.1", port, path, method: "GET", agent: false },
         (res) => {
           let body = "";
           res.setEncoding("utf8");
