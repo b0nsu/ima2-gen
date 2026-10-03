@@ -73,3 +73,15 @@ Final local canonical suite:4135 total,4132pass,3skip,0fail; typechecks, lint0er
 C discovered and fixed early-transient-error retries resetting the budget: an observed60ms failure previously ended at160ms despite100ms configuration. Prepared OAuth operations now share a monotonic deadline across retries/concurrent calls and preserve classic capture/API behavior. Remaining-budget tests went RED before the fix. Evidence022 is the first snapshot;024/025 record the verified correction. Existing source/identity assertions were updated only where the intentional deadline wrapper changed structure, with real propagation/callback tests retained.
 
 Next direction: wp3 consumes030/031 and the pre-reviewed rendered-fixture amendment. Post-merge CI37136569670, Agy37136569632, desktop37136569669 and CodeQL37136569699 were observed running on b016b222 and remain tracked before the next merge/release; they are not claimed passed at this closeout.
+
+wp2 platform follow-through: CI37136569670 on b016b222 completed SUCCESS across both Ubuntu runtimes, both Windows runtimes, macOS installation, frontend E2E and aggregate. Agy37136569632, desktop37136569669 and CodeQL37136569699 also succeeded.
+
+## wp3 closeout
+
+PR371 merged to dev as bacf9e957c6c236cfbd5c00020835752f3ec2588 after exact head1a3e3dd8 passed PR Fast Gate37140484986 (pull_request,attempt1, all four jobs SUCCESS), CodeQL37140484873 and screenshot gate. No unresolved review threads after merge; merged tree equals reviewed1a3e3dd8. OriginalPR364 closed as superseded after preserving both source commits/authorship and explaining the targeted fixes.
+
+Local canonical suite:4139 total,4136pass,3skip,0fail. Clean-head rendered suite:16pass with14 inspected PNGs, four locales at1280/390/320, prompt construction/persistence, mixed media, keyboard/focus, Node exclusion and teardown. Typechecks, lint0errors, UI build, inventory and line-count checks passed. Independent C review PASS/0 blockers. Full-test and web QA receipts bind to clean1a3e3dd8; screenshot assets use immutable pr-assets commitded7f252. Proof is component/request construction, not live provider generation, wire serialization, real polling or locale persistence.
+
+Measured label clipping was fixed only in the picker; a real Node exposure defect was fixed without changing Node generation or stored chips. The new finite translation expression was registered with six exact keys and all dictionary gates retained. Evidence033/034 records the implementation and limits.
+
+Next direction: wp4 safety guard, exact-head safety/promotion gates, publication and installed-artifact proof. Post-merge CI37141296063, Agy37141296073, desktop37141296069 and CodeQL37141296053 on bacf9e95 were observed running and must be confirmed before the next merge/release.
