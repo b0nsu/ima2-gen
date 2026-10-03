@@ -45,10 +45,13 @@ export function isVideoSoundIntentPrompt(id: string): boolean {
   return id.startsWith(SOUND_INTENT_PROMPT_ID_PREFIX);
 }
 
-export function buildVideoSoundIntentPrompt(preset: VideoSoundIntentPreset): InsertedPrompt {
+export function buildVideoSoundIntentPrompt(
+  preset: VideoSoundIntentPreset,
+  name = `Sound: ${preset.id}`,
+): InsertedPrompt {
   return {
     id: `${SOUND_INTENT_PROMPT_ID_PREFIX}${preset.id}`,
-    name: `Sound: ${preset.id}`,
+    name,
     text: preset.text,
     placement: "after",
   };

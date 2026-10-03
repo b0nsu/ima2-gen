@@ -1,6 +1,6 @@
 // What the composer can accept depends on the mode the user is in, and the rules are
 // not obvious: video only reaches grok-imagine-video, while uploaded audio clips
-// are not actionable in the composer because xAI gates that capability upstream.
+// are not connected to a generation request in the composer.
 //
 // This module exists because three surfaces (PromptComposer, Canvas, ImageNode) each
 // filtered dropped files with their own `type.startsWith("image/")` check. Every one of
@@ -57,9 +57,8 @@ export function sortDroppedByKind(files: File[], context: DropContext): SortedDr
       continue;
     }
     if (isAudio(file)) {
-      // Uploaded clips appear to be supported by the 1.5 model spec, but xAI gates them
-      // to trusted partner accounts. Do not accept them as attachments until the request
-      // pipeline can actually consume them; point users to preset voices instead.
+      // The composer request pipeline does not consume uploaded audio clips.
+      // Reject them explicitly instead of presenting them as attached references.
       sorted.rejected.push({ file, reason: "audio-upload-unsupported" });
       continue;
     }

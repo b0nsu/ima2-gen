@@ -506,8 +506,8 @@
     "afterBlocks": "After main prompt",
     "hint": "Ctrl + Enter to generate",
     "dropHere": "Drop to attach as reference (up to {max})",
-    "rejectNotMedia": "Only images and mp4 files can be attached",
-    "rejectAudioUploadUnsupported": "Audio file uploads are not available here. Use a preset voice in video settings, or describe music/sound in the prompt",
+    "rejectNotMedia": "Attach images here. For video editing or extension, use ima2 video edit / ima2 video extend.",
+    "rejectAudioUploadUnsupported": "Audio uploads are not supported here. Use a preset voice with a supported video model, or describe music and sound in the prompt.",
     "rejectVideoNeedsBase": "Video input is supported only on grok-imagine-video",
     "rejectVideoSingleOnly": "Only one source video can be used at a time",
     "videoUseCliForEdit": "Video editing and extension run through ima2 video edit / ima2 video extend"
@@ -1314,8 +1314,8 @@
     "voiceLimit": "Up to {max}. Refer to them as <AUDIO_0> in the prompt",
     "voiceNeeds15": "Voices are supported only on grok-imagine-video-1.5",
     "voiceCustomPlaceholder": "Custom voice ID (/v1/custom-voices)",
-    "soundIntentTitle": "Sound intent",
-    "soundIntentHelp": "Adds music/sound direction to the prompt without uploading audio files.",
+    "soundIntentTitle": "Sound direction",
+    "soundIntentHelp": "Choose one instruction to add to the prompt. Choosing another replaces it. It stays until removed, even after changing models. No audio file is uploaded.",
     "soundIntent": {
       "noMusic": "No music",
       "softBgm": "Soft BGM",

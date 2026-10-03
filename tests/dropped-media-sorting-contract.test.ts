@@ -30,9 +30,11 @@ test("audio uploads are rejected with an actionable explanation", () => {
   // Preset voices and prompt-described sound are supported; uploaded audio clips are not
   // wired into generation because xAI gates them upstream. The picker should not offer
   // audio/* as if it were actionable, and drops should still get an explicit outcome.
-  for (const model of [false as const, "grok-imagine-video", "grok-imagine-video-1.5", "grok-imagine-video-1.5-preview"]) {
+  for (const model of [false as const, "grok-imagine-video", "grok-imagine-video-1.5", "grok-imagine-video-1.5-preview", "grok-imagine-video-1.5-2026-05-30"]) {
     const sorted = sortDroppedByKind([mp3()], { videoModelSelected: model });
     assert.equal(sorted.rejected[0]?.reason, "audio-upload-unsupported", String(model));
+    assert.equal(sorted.images.length + sorted.videos.length, 0);
+    assert.equal(composerAcceptAttr({ videoModelSelected: model }).includes("audio"), false);
   }
 });
 
@@ -70,7 +72,9 @@ test("a mixed drop sorts every file and leaves none unaccounted for", () => {
 
 test("the file picker offers exactly what the drop handler accepts", () => {
   assert.equal(composerAcceptAttr({ videoModelSelected: false }), "image/*");
-  assert.equal(composerAcceptAttr({ videoModelSelected: "grok-imagine-video-1.5" }), "image/*");
+  for (const model of ["grok-imagine-video-1.5", "grok-imagine-video-1.5-preview", "grok-imagine-video-1.5-2026-05-30"]) {
+    assert.equal(composerAcceptAttr({ videoModelSelected: model }), "image/*");
+  }
   assert.equal(composerAcceptAttr({ videoModelSelected: "grok-imagine-video" }), "image/*,video/mp4");
 });
 
