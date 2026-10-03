@@ -43,9 +43,14 @@ npm run release -- patch --promote --approve   # or minor / major
 dispatches `release.yml` pinned to that main SHA, watches it, approves the
 `npm-stable` and `desktop-production` deployments of this release
 (`--approve`; without it the script prints the approve commands), and keeps
-watching until the desktop release is published. Add `--dry-run` to verify
-without touching any remote, `--canary` to also exercise the candidate CI gate,
-and `--yes` to skip the confirmation prompts.
+watching until the desktop release is published. Add `--yes` to skip the
+confirmation prompts.
+
+`--dry-run` dispatches hosted validation on already-promoted main without
+publishing branches, tags, or packages. It refuses when dev needs promotion,
+even with `--promote`. `--canary` creates a candidate ref, dispatches its CI,
+and cleans up that ref afterward without publishing the release. Combining
+`--canary` with `--promote` performs real dev -> main promotion first.
 
 Inside `release.yml` the cut reuses main's push CI when the version commit only
 changes `package.json`/`package-lock.json` (a dedicated candidate CI run is
