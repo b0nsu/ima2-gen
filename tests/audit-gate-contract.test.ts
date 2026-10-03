@@ -166,7 +166,13 @@ const stubFor = (payload: unknown, exitCode: number) =>
 
 test("the gate exits non-zero when the report contains high findings", () => {
   const result = runGateWithStubNpm(
-    stubFor({ metadata: { vulnerabilities: { info: 0, low: 0, moderate: 0, high: 2, critical: 0 } } }, 1),
+    stubFor({
+      metadata: { vulnerabilities: { info: 0, low: 0, moderate: 0, high: 2, critical: 0 } },
+      vulnerabilities: {
+        first: { severity: "high", via: [{ url: "https://github.com/advisories/GHSA-aaaa-bbbb-cccc" }] },
+        second: { severity: "high", via: [{ url: "https://github.com/advisories/GHSA-dddd-eeee-ffff" }] },
+      },
+    }, 1),
   );
   assert.equal(result.status, 1, "a high finding must fail the build");
   assert.match(result.stderr, /2 high\+ vulnerabilit/);

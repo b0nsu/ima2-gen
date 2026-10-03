@@ -8,20 +8,12 @@
   ],
   "exceptions": [
     {
-      "ghsa": "GHSA-w3rx-r6r6-pgpr",
-      "package": "image-size",
-      "scope": "ui",
-      "reason": "Unreachable: image-size is pptxgenjs' Node-only path and Vite tree-shakes it out of the browser bundle. No fixed version exists — the advisory covers <=2.0.2 and 2.0.2 is the newest release, so npm reports the package range as '*'.",
-      "evidence": "pptxgenjs@4.0.1 browser map sets image-size to false; grep -c 'image-size|imageSize' ui/dist/assets/pptxgen.es-*.js -> 0; grep -oE 'icns|readUInt32BE|jxl|heif' on the same bundle -> no match; npm view image-size dist-tags -> { latest: '2.0.2', legacy: '1.2.1' }; an overrides bump to ^2.0.2 was applied and audit stayed red. devlog/_plan/260812_navrail_grok_autotag/040_closeout.md",
-      "expires": "2026-11-12"
-    },
-    {
-      "ghsa": "GHSA-5p2g-fcmc-qvqq",
-      "package": "image-size",
-      "scope": "ui",
-      "reason": "Same unreachable dependency as GHSA-w3rx-r6r6-pgpr: JXL/HEIF parsers in the Node-only path that never reaches the browser bundle.",
-      "evidence": "See GHSA-w3rx-r6r6-pgpr above; both advisories resolve to the single image-size dependency of pptxgenjs@4.0.1.",
-      "expires": "2026-11-12"
+      "ghsa": "GHSA-vfj7-8cjw-p6xm",
+      "package": "braces",
+      "scope": "root",
+      "reason": "Unreachable vulnerable pattern parsing: the sole production trash caller passes glob:false; real installed trash regression and a positive control verify the glob boundary. Maintainers revalidate on dependency/caller changes and before expiry.",
+      "evidence": "tests/system-trash-glob-safety.test.ts; tests/audit-trash-graph-contract.test.ts; tests/audit-gate-contract.test.ts; devlog/_plan/261003-issue-pr-release/012_security-evidence.md; trash10.1.1/globby14.1.0/fast-glob3.3.3/micromatch4.0.8/braces3.0.3",
+      "expires": "2026-10-17T00:00:00.000Z"
     }
   ]
 }
