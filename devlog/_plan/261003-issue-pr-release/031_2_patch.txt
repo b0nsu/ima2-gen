@@ -79,7 +79,7 @@ index 93091e339..e5f318861 100644
  // This module exists because three surfaces (PromptComposer, Canvas, ImageNode) each
  // filtered dropped files with their own `type.startsWith("image/")` check. Every one of
 @@ -11,14 +11,12 @@
- 
+
  export type DropRejection =
    | "not-media"
 -  | "audio-needs-video-model"
@@ -87,7 +87,7 @@ index 93091e339..e5f318861 100644
 +  | "audio-upload-unsupported"
    | "video-needs-base"
    | "video-single-only";
- 
+
  export interface SortedDrop {
    images: File[];
 -  audios: File[];
@@ -96,7 +96,7 @@ index 93091e339..e5f318861 100644
  }
 @@ -29,12 +27,6 @@ export interface DropContext {
  }
- 
+
  const VIDEO_MODEL_BASE = "grok-imagine-video";
 -const VIDEO_MODEL_15 = "grok-imagine-video-1.5";
 -const VIDEO_15_ALIASES = new Set([
@@ -104,7 +104,7 @@ index 93091e339..e5f318861 100644
 -  "grok-imagine-video-1.5-preview",
 -  "grok-imagine-video-1.5-2026-05-30",
 -]);
- 
+
  function isAudio(file: File): boolean {
    return file.type.startsWith("audio/");
 @@ -55,9 +47,8 @@ function isVideo(file: File): boolean {
@@ -116,7 +116,7 @@ index 93091e339..e5f318861 100644
    const model = context.videoModelSelected;
 -  const is15 = typeof model === "string" && VIDEO_15_ALIASES.has(model);
    const isBase = model === VIDEO_MODEL_BASE;
- 
+
    for (const file of files) {
 @@ -66,12 +57,10 @@ export function sortDroppedByKind(files: File[], context: DropContext): SortedDr
        continue;

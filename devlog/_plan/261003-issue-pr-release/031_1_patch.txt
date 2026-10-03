@@ -10,7 +10,7 @@ index 0cae3186f..80741a5b8 100644
 --- a/devlog/_plan/260908_xai_imagine_spec_resync/030_wp35_gui_inputs.md
 +++ b/devlog/_plan/260908_xai_imagine_spec_resync/030_wp35_gui_inputs.md
 @@ -78,8 +78,7 @@ export interface SortedDrop {
- 
+
  export type DropRejection =
    | "not-media"          // 지원하지 않는 MIME
 -  | "audio-needs-video-model"   // 오디오인데 비디오 모델 미선택
@@ -19,8 +19,8 @@ index 0cae3186f..80741a5b8 100644
    | "video-needs-base"   // 영상인데 1.5 선택됨
    | "video-single-only"; // 영상 2개 이상
  ```
-@@ -190,8 +189,8 @@ base 모델에서 보이스 섹션은 **숨기지 않고 비활성화**하고, 
- 
+@@ -190,8 +189,8 @@ base 모델에서 보이스 섹션은 **숨기지 않고 비활성화**하고,
+
  ```
  prompt.dropHereVideo, prompt.dropHereAudio
 -prompt.rejectNotMedia, prompt.rejectAudioNeedsVideoModel,
@@ -31,7 +31,7 @@ index 0cae3186f..80741a5b8 100644
  video.sourceVideo, video.modeEdit, video.modeExtend, video.extendDurationLabel
  ```
 @@ -202,8 +201,8 @@ video.sourceVideo, video.modeEdit, video.modeExtend, video.extendDurationLabel
- 
+
  ```
  - image/png 은 images 로
 -- audio/mpeg 은 비디오 1.5 선택 시 audios, base 선택 시 rejected(audio-needs-15)
@@ -48,7 +48,7 @@ index 6f97ab6ae..31bb9a997 100644
 @@ -26,21 +26,14 @@ test("images are accepted in every mode", () => {
    }
  });
- 
+
 -test("audio reaches only grok-imagine-video-1.5, and says why otherwise", () => {
 -  // 1.5 is the only model declaring audio as an input modality; the base model answers
 -  // 400 "reference_audios is not supported for this model."
@@ -72,7 +72,7 @@ index 6f97ab6ae..31bb9a997 100644
 -    "audio-needs-video-model",
 -  );
  });
- 
+
  test("video reaches only the base model, one at a time", () => {
 @@ -71,13 +64,13 @@ test("anything else is rejected with a reason rather than dropped silently", ()
  test("a mixed drop sorts every file and leaves none unaccounted for", () => {
@@ -82,14 +82,14 @@ index 6f97ab6ae..31bb9a997 100644
 +  const total = sorted.images.length + sorted.videos.length + sorted.rejected.length;
    assert.equal(total, files.length, "every dropped file must land in exactly one bucket");
  });
- 
+
  test("the file picker offers exactly what the drop handler accepts", () => {
    assert.equal(composerAcceptAttr({ videoModelSelected: false }), "image/*");
 -  assert.equal(composerAcceptAttr({ videoModelSelected: "grok-imagine-video-1.5" }), "image/*,audio/*");
 +  assert.equal(composerAcceptAttr({ videoModelSelected: "grok-imagine-video-1.5" }), "image/*");
    assert.equal(composerAcceptAttr({ videoModelSelected: "grok-imagine-video" }), "image/*,video/mp4");
  });
- 
+
 @@ -86,8 +79,7 @@ test("every rejection reason has a message in all four locales", () => {
    // the locale files are JSON and cannot be typed. This is that check.
    const reasons: DropRejection[] = [
