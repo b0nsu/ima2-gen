@@ -1,4 +1,6 @@
-# wp2 implementation evidence
+# wp2 first implementation evidence
+
+This records the first implementation before the prepared-execution retry-budget correction. See024 and025 for the later scope and verification.
 
 Implementation frozen for main verification on 2026-10-04 (Asia/Seoul). Main owns git, FSM, delivery, source-of-truth docs and canonical gates.
 
