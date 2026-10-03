@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.26.2] - 2026-10-04
+
+### Added
+
+- **Video sound instructions** — composer presets add one prompt chip for music, ambience, effects or no dialogue. Selection can be replaced, toggled or cleared, persists across model changes/reload, and uses localized labels. The picker fits narrow screens and stays hidden in Node mode, whose prompts are independent. (#364, #371)
+
+### Fixed
+
+- **One OAuth time budget across retries** — readiness, planning, rendering and rate-limit waits share a job deadline, while prepared executions retain the remaining budget across caller retries and concurrent calls. Expiry is `504 OAUTH_IMAGE_TIMEOUT`; explicit cancellation remains `499`. Completed images and local persistence callbacks are preserved. (#351, #370)
+- **Composer audio feedback** — unsupported audio drops now explain the limitation instead of suggesting an audio reference was attached. Image attachment and existing video CLI guidance remain available. (#364, #371)
+- **Dry-run release safety** — `--dry-run` refuses when dev needs promotion, including when combined with `--promote --approve --yes`. Already-promoted main can still dispatch hosted validation without publishing branches, tags or packages.
+
+### Changed
+
+- Updated the reviewed runtime, lint, node-canvas and CodeQL dependency pins, including MCP SDK, Codex, OpenAI, sharp and XYFlow. (#369)
+
+### Security
+
+- Pinned the browser PPTX dependency tree to `image-size` 2.0.4 and removed its obsolete audit exceptions. The root braces advisory [GHSA-vfj7-8cjw-p6xm](https://github.com/advisories/GHSA-vfj7-8cjw-p6xm) retains one evidence-backed exception through 2026-10-17: the inspected application path disables glob parsing, with real-package and dependency-path regression guards. This is not a claim that the vulnerable dependency was removed.
+
 ## [3.26.1] - 2026-10-02
 
 ### Fixed

@@ -14,8 +14,9 @@
  * One job (a plan plus its renders) spends one retry budget: a retry count, a total wait and
  * the job's generation deadline, so a burst never stretches a job past its timeout.
  *
- * MUST stay a leaf module: it only borrows the abortable sleep, jitter and Retry-After parsing.
+ * MUST stay a leaf module: only retry primitives and the dependency-free job abort helper.
  */
+import { oauthAbortError, throwIfOAuthAborted } from "./oauthJobDeadline.js";
 import { jitterDelayMs, retryAfterDelayMs, sleepWithAbort } from "./grokUpstreamRetry.js";
 
 export type OAuthRateLimitKind = "transient" | "permanent";
@@ -129,17 +130,13 @@ function retryAfterOf(error: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-function canceledError(cause: unknown) {
-  return Object.assign(new Error("Generation canceled"), { status: 499, code: "GENERATION_CANCELED", cause });
-}
-
 /** Retry state shared by every call of one job; updated synchronously, so parallel renders share it safely. */
 export interface OAuthRateLimitBudget {
   retries: number;
   totalWaitMs: number;
   /**
    * Epoch ms no rate-limit wait may reach (the job's generation timeout); undefined means none.
-   * It bounds only the waits: each request keeps its own transport timeout.
+   * The job owner also bounds readiness and transport with its shared signal.
    */
   deadlineAt: number | undefined;
 }
@@ -189,12 +186,13 @@ export async function withOAuthRateLimitRetry<T>(request: () => Promise<T>, opti
   const now = options.now ?? Date.now;
   const signal = options.signal ?? undefined;
   for (let attempt = 1; ; attempt++) {
+    throwIfOAuthAborted(signal);
     try {
       return await request();
     } catch (error) {
       if (!isTransientOAuthRateLimit(error)) throw error;
       // A job canceled while its request was being rate limited ends as a cancel, not a 429.
-      if (signal?.aborted) throw canceledError(signal.reason ?? error);
+      if (signal?.aborted) throw oauthAbortError(signal);
       const waitMs = oauthRateLimitDelayMs(attempt, retryAfterOf(error), config, options.random);
       const reason = budgetShortfall(budget, config, waitMs, now());
       if (reason) {
@@ -207,10 +205,10 @@ export async function withOAuthRateLimitRetry<T>(request: () => Promise<T>, opti
       try {
         await sleep(waitMs, signal);
       } catch (sleepError) {
-        if (signal?.aborted) throw canceledError(sleepError);
+        if (signal?.aborted) throw oauthAbortError(signal);
         throw sleepError;
       }
-      if (signal?.aborted) throw canceledError(signal.reason);
+      if (signal?.aborted) throw oauthAbortError(signal);
     }
   }
 }

@@ -11,6 +11,8 @@
  * The result keeps ParsedResponsesResult's shape so routes, SSE, history and error
  * diagnostics stay unchanged.
  */
+import { config } from "../config.js";
+import { createOAuthJobDeadline, throwIfOAuthAborted } from "./oauthJobDeadline.js";
 import { logEvent } from "./logger.js";
 import type { RouteRuntimeContext } from "./runtimeContext.js";
 import type {
@@ -172,14 +174,6 @@ function extensionFor(mime: string) {
   return mime === "image/jpeg" ? "jpg" : mime === "image/webp" ? "webp" : "png";
 }
 
-/**
- * One retry budget per job: the plan and every render draw from the same retry count and total
- * wait, and no wait may run past the job's generation timeout.
- */
-function rateLimitBudgetFor(job: OAuthImageJob): OAuthRateLimitBudget {
-  return createOAuthRateLimitBudget(job.ctx?.config?.oauth?.generationTimeoutMs ?? 400 * 1000);
-}
-
 /** Replay a call the backend rejected with a per-minute rate limit; log every wait. */
 function withRateLimitBackoff<T>(job: OAuthImageJob, budget: OAuthRateLimitBudget, stage: "plan" | "render", request: () => Promise<T>) {
   return withOAuthRateLimitRetry(request, {
@@ -259,12 +253,69 @@ async function plan(job: OAuthImageJob, budget: OAuthRateLimitBudget) {
   return { result, prompts };
 }
 
-export async function runOAuthImageJob(job: OAuthImageJob): Promise<OAuthImageJobResult> {
+type Settled = { status: "done"; value: Awaited<ReturnType<typeof renderOne>> } | { status: "failed"; error: unknown };
+
+function startRenders(job: OAuthImageJob, budget: OAuthRateLimitBudget, prompts: string[]) {
+  const slots = prompts.map(() => {
+    let resolve!: (value: Settled) => void;
+    const promise = new Promise<Settled>((r) => { resolve = r; });
+    return { promise, resolve };
+  });
+  let cursor = 0;
+  const worker = async () => {
+    while (cursor < prompts.length) {
+      const index = cursor++;
+      try {
+        slots[index]?.resolve({ status: "done", value: await renderOne(job, budget, prompts[index] as string) });
+      } catch (error) {
+        slots[index]?.resolve({ status: "failed", error });
+      }
+    }
+  };
+  const workers = Array.from({ length: Math.min(RENDER_CONCURRENCY, prompts.length) }, () => worker());
+
+  return { slots, workers };
+}
+
+interface RenderContext {
+  prompts: string[];
+  direct: boolean;
+  eventTypes: Record<string, number>;
+  usage: Record<string, number>;
+  kind: string;
+}
+
+async function collectRenders(job: OAuthImageJob, batch: ReturnType<typeof startRenders>, context: RenderContext) {
+  const { prompts, direct, eventTypes, usage, kind } = context;
+  const images: ParsedImage[] = [];
+  const originalIndexes: number[] = [];
+  let firstError: unknown;
+  // Deliver in stage order so sequences persist and stream in the order the planner wrote them.
+  for (const [index, slot] of batch.slots.entries()) {
+    const settled = await slot.promise;
+    eventTypes[kind] = (eventTypes[kind] ?? 0) + 1;
+    if (settled.status === "failed") {
+      firstError ??= settled.error;
+      logEvent(job.scope, "render_failed", { requestId: job.requestId, index });
+      continue;
+    }
+    addUsage(usage, settled.value.usage);
+    const b64 = settled.value.images[0]?.b64;
+    if (!b64) continue;
+    const image = { b64, revisedPrompt: direct ? null : (prompts[index] as string) };
+    images.push(image);
+    originalIndexes.push(index);
+    await job.onFinalImage?.(image, index);
+  }
+  await Promise.all(batch.workers);
+  return { images, originalIndexes, firstError };
+}
+
+async function runOAuthImageJobWithinDeadline(job: OAuthImageJob, budget: OAuthRateLimitBudget): Promise<OAuthImageJobResult> {
   // Direct mode renders the user's prompt verbatim, but a multi-image request still needs one
   // prompt per stage, so it goes through the planner (its user text already carries the
   // sequence instructions and the Direct fidelity rule).
   const direct = job.mode === "direct" && job.maxImages <= 1;
-  const budget = rateLimitBudgetFor(job);
   const planned = direct
     ? { result: null, prompts: Array.from({ length: Math.max(1, job.maxImages) }, () => job.directPrompt) }
     : await plan(job, budget);
@@ -276,46 +327,10 @@ export async function runOAuthImageJob(job: OAuthImageJob): Promise<OAuthImageJo
   const kind = job.images.length ? "images.edits" : "images.generations";
   logEvent(job.scope, "plan_done", { requestId: job.requestId, direct, prompts: planned.prompts.length });
 
-  type Settled = { status: "done"; value: Awaited<ReturnType<typeof renderOne>> } | { status: "failed"; error: unknown };
-  const slots = planned.prompts.map(() => {
-    let resolve!: (value: Settled) => void;
-    const promise = new Promise<Settled>((r) => { resolve = r; });
-    return { promise, resolve };
+  const batch = startRenders(job, budget, planned.prompts);
+  const { images, originalIndexes, firstError } = await collectRenders(job, batch, {
+    prompts: planned.prompts, direct, eventTypes, usage, kind,
   });
-  let cursor = 0;
-  const worker = async () => {
-    while (cursor < planned.prompts.length) {
-      const index = cursor++;
-      try {
-        slots[index]?.resolve({ status: "done", value: await renderOne(job, budget, planned.prompts[index] as string) });
-      } catch (error) {
-        slots[index]?.resolve({ status: "failed", error });
-      }
-    }
-  };
-  const workers = Array.from({ length: Math.min(RENDER_CONCURRENCY, planned.prompts.length) }, () => worker());
-
-  const images: ParsedImage[] = [];
-  const originalIndexes: number[] = [];
-  let firstError: unknown;
-  // Deliver in stage order so sequences persist and stream in the order the planner wrote them.
-  for (const [index, slot] of slots.entries()) {
-    const settled = await slot.promise;
-    eventTypes[kind] = (eventTypes[kind] ?? 0) + 1;
-    if (settled.status === "failed") {
-      firstError ??= settled.error;
-      logEvent(job.scope, "render_failed", { requestId: job.requestId, index });
-      continue;
-    }
-    addUsage(usage, settled.value.usage);
-    const b64 = settled.value.images[0]?.b64;
-    if (!b64) continue;
-    const image = { b64, revisedPrompt: direct ? null : (planned.prompts[index] as string) };
-    images.push(image);
-    originalIndexes.push(index);
-    await job.onFinalImage?.(image, index);
-  }
-  await Promise.all(workers);
   // A single render has no partial result to return: surface its own error.
   if (planned.prompts.length === 1 && firstError !== undefined) throw firstError;
   diagnostics.eventTypes = eventTypes;
@@ -336,4 +351,18 @@ export async function runOAuthImageJob(job: OAuthImageJob): Promise<OAuthImageJo
     ...(originalIndexes.length !== planned.prompts.length || firstError !== undefined ? { originalIndexes } : {}),
     ...(firstError !== undefined ? { error: firstError } : {}),
   };
+}
+
+export async function runOAuthImageJob(job: OAuthImageJob): Promise<OAuthImageJobResult> {
+  const lifetime = createOAuthJobDeadline(
+    job.ctx.config?.oauth?.generationTimeoutMs ?? config.oauth.generationTimeoutMs, job.signal,
+  );
+  try {
+    throwIfOAuthAborted(lifetime.signal);
+    return await runOAuthImageJobWithinDeadline(
+      { ...job, signal: lifetime.signal }, createOAuthRateLimitBudget(lifetime.timeoutMs),
+    );
+  } finally {
+    lifetime.dispose();
+  }
 }

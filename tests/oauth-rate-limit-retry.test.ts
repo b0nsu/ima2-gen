@@ -242,11 +242,21 @@ describe("OAuth rate-limit backoff", () => {
     assert.deepEqual(waits, []);
   });
 
-  it("lets a non-rate-limit error surface unchanged even after a cancel", async () => {
+  it("a pre-aborted signal rejects before entering a non-rate-limit request", async () => {
     const controller = new AbortController();
     controller.abort();
+    let calls = 0;
+    await assert.rejects(withOAuthRateLimitRetry(async () => { calls++; throw new Error("boom"); }, { config: CONFIG, signal: controller.signal }),
+      (thrown: { status?: number; code?: string }) => thrown.status === 499 && thrown.code === "GENERATION_CANCELED");
+    assert.equal(calls, 0);
+  });
+
+  it("an entered request preserves its non-rate-limit error after cancellation", async () => {
+    const controller = new AbortController();
     const error = new Error("boom");
-    await assert.rejects(withOAuthRateLimitRetry(async () => { throw error; }, { config: CONFIG, signal: controller.signal }),
+    let calls = 0;
+    await assert.rejects(withOAuthRateLimitRetry(async () => { calls++; controller.abort(); throw error; }, { config: CONFIG, signal: controller.signal }),
       (thrown) => thrown === error);
+    assert.equal(calls, 1);
   });
 });

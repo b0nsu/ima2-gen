@@ -63,7 +63,9 @@ describe("multimode backend contract", () => {
     assert.match(oauth, /Do not create a contact sheet/);
     assert.match(oauth, /Do not create a storyboard sheet/);
     assert.match(oauth, /Do not put multiple panels inside one image/);
-    const streamCalls = collectCallArguments(transport, transportOwner, "parseStream", "postResponses");
+    const readers = collectCallArguments(transport, transportOwner, "readResponses", "postResponses");
+    assert.deepEqual(readers, [["res", "args", "lifetime.wait"]]);
+    const streamCalls = collectCallArguments(transport, transportOwner, "parseStream", "readResponses");
     assert.equal(streamCalls.length, 1);
     assert.match(streamCalls[0][1], /onPartialImage, onFinalImage/);
     assert.match(parser, /export async function parseStream/);

@@ -212,16 +212,16 @@ scope/revision/identity reconciliation shared by polling and reload actions.
 | `lib/oauthProxy/streams.ts` | 245 | SSE/event-stream helpers and safe stream diagnostics |
 | `lib/oauthProxy/prompts.ts` | 158 | Prompt assembly with injected `SAFETY_INTENT_POLICY` from `lib/promptSafetyPolicy.ts` |
 | `lib/oauthProxy/references.ts` | 46 | Reference image preparation and validation for the OAuth path |
-| `lib/oauthProxy/runtime.ts` | 141 | OAuth runtime context and request execution |
+| `lib/oauthProxy/runtime.ts` | 150 | OAuth runtime context and request execution |
 | `lib/oauthProxy/errors.ts` | 129 | OAuth-specific error codes and normalization |
 | `lib/oauthProxy/types.ts` | 10 | Shared GPT OAuth prompt/runtime types (re-exported from `index`) |
 | `lib/promptSafetyPolicy.ts` | 3 | `SAFETY_INTENT_POLICY` constant: 3-line intent policy injected by oauthProxy/prompts and the API-key Responses adapter |
 | `lib/responsesImageAdapter.ts` | 6 | Compatibility re-exports of the three OpenAI operations; existing agent/sprite imports remain valid |
-| `lib/responsesTransport.ts` | 350 | Responses endpoint/auth/readiness, redacted errors, abort/timeout and JSON/SSE parser boundary |
-| `lib/oauthRateLimit.ts` | 217 | GPT OAuth per-minute rate-limit classifier (usage caps excluded first), jittered abortable backoff and one per-job retry budget (count, total wait, generation deadline) |
+| `lib/responsesTransport.ts` | 346 | Responses endpoint/auth/readiness, redacted errors, abort/timeout and JSON/SSE parser boundary |
+| `lib/oauthRateLimit.ts` | 215 | GPT OAuth per-minute rate-limit classifier (usage caps excluded first), jittered abortable backoff and one per-job retry budget (count, total wait, generation deadline) |
 | `lib/providers/adapters/openaiTypes.ts` | 30 | Original positional-operation reference/options types, unchanged optional fields |
 | `lib/providers/adapters/openaiOperations.ts` | 366 | Actual OpenAI generate/edit/multimode operation bodies and reference normalization |
-| `lib/providers/adapters/openaiExecution.ts` | 142 | Typed four-surface OpenAI owner, classic retry and native callback/result mapping |
+| `lib/providers/adapters/openaiExecution.ts` | 167 | Typed four-surface OpenAI owner, classic retry and native callback/result mapping |
 | `lib/providerOptions.ts` | 179 | Per-provider option assembly; rejects catalog-only Comfy video workflows on the classic image path |
 | `lib/runtimeContext.ts` | 241 | Per-request runtime context plumbing for routes and lib helpers |
 | `lib/errInfo.ts` | 73 | Error info shape and helpers shared across routes/lib |
@@ -426,6 +426,8 @@ Backed by `routes/agent.ts`; no CLI wrapper. Session/turn/queue persistence and 
 | `GalleryImageTile.tsx` | 67 | Per-image gallery thumbnail and selection state |
 | `CardNewsGalleryTile.tsx` | 58 | Card-news set tile in the gallery |
 | `HistoryStrip.tsx` / `HistoryStripLayoutToggle.tsx` | n/a | Inline history strip with rail/grid layout toggle |
+| `ui/src/components/VideoControlsPanel.tsx` | 223 | Video model/options, voice controls and sound-intent prompt chips |
+| `ui/src/components/SoundIntentPicker.tsx` | 66 | Localized sound-intent selection using persisted ordinary prompt chips |
 | `PromptComposer.tsx` | 498 | Prompt input, reference handling, style-sheet entry, save-to-library, and provider-gated NovelAI Positive prompt pane |
 | `NegativePromptField.tsx` | 58 | Self-gated NovelAI Undesired content pane shared by Classic, Home, and mobile compose surfaces |
 | `home/HomePromptComposer.tsx` | 153 | Home composer with the same provider-gated NovelAI dual-pane contract |

@@ -24,6 +24,8 @@ Deferred / 미래 항목은 `_plan/` 직속이 아니라 `_plan/_future/`에 둔
 
 | 경로 | 상태 |
 |---|---|
+| `261003-issue-pr-release/` | 이슈 #351, PR #360–364 검토·수정·dev 반영 및 릴리스. 의존성 보안 경로 검증, OAuth 전체 작업 타이머, 오디오 안내·사운드 프리셋, dry-run 승격 방지 순서로 진행. #338·#150은 별도 설계 범위로 유지. |
+| `261002_background_hardening/` | PR #365 데스크톱 백그라운드 모드 수리와 리뷰 보강을 3.26.1로 배포 완료. 로그인 때만 숨김 시작, 창 닫기는 창을 없애고 서버는 트레이에서 유지, 업데이트 설치가 시작되지 않으면 서버를 다시 띄우는 복구(macOS는 감시 타이머 없음), 정지가 끝나지 않으면 기다리다 오류로 끝내는 Windows 프로세스 트리 정지, Windows에서도 `/api/admin/stop`이 서버 정리 루틴을 실행. 남은 것: 실제 NSIS·Squirrel.Mac 업데이트와 렌더러 강제 종료를 설치본에서 확인, `release.mjs --promote --dry-run`이 실제로 승격하는 문제. 기록은 000~040. |
 | `260929_background_runtime/` | opencodex식 백그라운드 런타임. `ima2 start` / `status --runtime` / `stop --json` / `restart` / `logs`, 데스크톱이 이미 떠 있는 네이티브 서버를 붙잡거나(attach) 묻거나 넘겨받아(takeover) 번들 서버로 바꾸는 흐름, CLI 정지를 데스크톱이 크래시로 오인하지 않게 하는 정지 의도 마커. 로드맵 000~050, wp2~wp5 진행 중. |
 | `260930_auto_update/` | opencodex식 자동 업데이트와 업데이트 표시. npm 쪽은 캐시된 레지스트리 확인(`version.json`), `GET /api/update/badge`, `ima2 update`(전역 설치 후 서비스·백그라운드 재시작, "Updated to vX"), 데스크톱은 electron-updater 상태를 메뉴 막대 점·트레이·앱 메뉴·트레이 팝업·웹 UI에 같은 스냅샷으로 표시하고 업데이트 뒤 한 번 "updated to vX" 알림. 로드맵 000~050, wp1 문서 → wp2 구현 → wp3 3.26.0 배포. |
 | `260922_macos_arm64_release/` | 데스크톱 배포 1~4단계. Apple Silicon 전용 DMG/ZIP, fail-closed 서명·공증, packaged darwin/arm64 updater와 사용자 승인 설치, exact asset/checksum Draft 및 `desktop-production` 승인 후 공개 workflow를 구현. Environment 설정, 실제 tagged notarization과 두 버전 live update는 후속 범위. |

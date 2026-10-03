@@ -1,0 +1,400 @@
+# Reviewed upstream change candidates
+
+These pinned upstream diffs are proposed implementation inputs, not applied code.
+
+## PR #364: 3949f8b62026af29a227693d3a0e63d885bbe5e0
+
+```diff
+diff --git a/devlog/_plan/260908_xai_imagine_spec_resync/030_wp35_gui_inputs.md b/devlog/_plan/260908_xai_imagine_spec_resync/030_wp35_gui_inputs.md
+index 0cae3186f..80741a5b8 100644
+--- a/devlog/_plan/260908_xai_imagine_spec_resync/030_wp35_gui_inputs.md
++++ b/devlog/_plan/260908_xai_imagine_spec_resync/030_wp35_gui_inputs.md
+@@ -78,8 +78,7 @@ export interface SortedDrop {
+
+ export type DropRejection =
+   | "not-media"          // 지원하지 않는 MIME
+-  | "audio-needs-video-model"   // 오디오인데 비디오 모델 미선택
+-  | "audio-needs-15"     // 오디오인데 base 모델 선택됨
++  | "audio-upload-unsupported"  // 오디오 업로드는 composer에서 실제 생성 입력으로 쓸 수 없음
+   | "video-needs-base"   // 영상인데 1.5 선택됨
+   | "video-single-only"; // 영상 2개 이상
+ ```
+@@ -190,8 +189,8 @@ base 모델에서 보이스 섹션은 **숨기지 않고 비활성화**하고,
+
+ ```
+ prompt.dropHereVideo, prompt.dropHereAudio
+-prompt.rejectNotMedia, prompt.rejectAudioNeedsVideoModel,
+-prompt.rejectAudioNeeds15, prompt.rejectVideoNeedsBase, prompt.rejectVideoSingleOnly
++prompt.rejectNotMedia, prompt.rejectAudioUploadUnsupported,
++prompt.rejectVideoNeedsBase, prompt.rejectVideoSingleOnly
+ video.voiceSection, video.voiceLimit, video.voiceNeeds15, video.voiceCustomPlaceholder
+ video.sourceVideo, video.modeEdit, video.modeExtend, video.extendDurationLabel
+ ```
+@@ -202,8 +201,8 @@ video.sourceVideo, video.modeEdit, video.modeExtend, video.extendDurationLabel
+
+ ```
+ - image/png 은 images 로
+-- audio/mpeg 은 비디오 1.5 선택 시 audios, base 선택 시 rejected(audio-needs-15)
+-- audio/mpeg 은 이미지 모드에서 rejected(audio-needs-video-model)
++- audio/mpeg 은 모든 composer 모드에서 rejected(audio-upload-unsupported)
++- composer file picker는 실제 업로드/생성 입력으로 이어지지 않는 audio/* 를 제안하지 않음
+ - video/mp4 은 base 선택 시 videos, 1.5 선택 시 rejected(video-needs-base)
+ - video 2개는 첫 개만 videos, 나머지 rejected(video-single-only)
+ - application/pdf 는 rejected(not-media)
+diff --git a/tests/dropped-media-sorting-contract.test.ts b/tests/dropped-media-sorting-contract.test.ts
+index 6f97ab6ae..31bb9a997 100644
+--- a/tests/dropped-media-sorting-contract.test.ts
++++ b/tests/dropped-media-sorting-contract.test.ts
+@@ -26,21 +26,14 @@ test("images are accepted in every mode", () => {
+   }
+ });
+
+-test("audio reaches only grok-imagine-video-1.5, and says why otherwise", () => {
+-  // 1.5 is the only model declaring audio as an input modality; the base model answers
+-  // 400 "reference_audios is not supported for this model."
+-  assert.equal(sortDroppedByKind([mp3()], { videoModelSelected: "grok-imagine-video-1.5" }).audios.length, 1);
+-  for (const alias of ["grok-imagine-video-1.5-preview", "grok-imagine-video-1.5-2026-05-30"]) {
+-    assert.equal(sortDroppedByKind([mp3()], { videoModelSelected: alias }).audios.length, 1, alias);
++test("audio uploads are rejected with an actionable explanation", () => {
++  // Preset voices and prompt-described sound are supported; uploaded audio clips are not
++  // wired into generation because xAI gates them upstream. The picker should not offer
++  // audio/* as if it were actionable, and drops should still get an explicit outcome.
++  for (const model of [false as const, "grok-imagine-video", "grok-imagine-video-1.5", "grok-imagine-video-1.5-preview"]) {
++    const sorted = sortDroppedByKind([mp3()], { videoModelSelected: model });
++    assert.equal(sorted.rejected[0]?.reason, "audio-upload-unsupported", String(model));
+   }
+-  assert.equal(
+-    sortDroppedByKind([mp3()], { videoModelSelected: "grok-imagine-video" }).rejected[0]?.reason,
+-    "audio-needs-15",
+-  );
+-  assert.equal(
+-    sortDroppedByKind([mp3()], { videoModelSelected: false }).rejected[0]?.reason,
+-    "audio-needs-video-model",
+-  );
+ });
+
+ test("video reaches only the base model, one at a time", () => {
+@@ -71,13 +64,13 @@ test("anything else is rejected with a reason rather than dropped silently", ()
+ test("a mixed drop sorts every file and leaves none unaccounted for", () => {
+   const files = [png(), mp3(), mp4(), file("a.pdf", "application/pdf")];
+   const sorted = sortDroppedByKind(files, { videoModelSelected: "grok-imagine-video-1.5" });
+-  const total = sorted.images.length + sorted.audios.length + sorted.videos.length + sorted.rejected.length;
++  const total = sorted.images.length + sorted.videos.length + sorted.rejected.length;
+   assert.equal(total, files.length, "every dropped file must land in exactly one bucket");
+ });
+
+ test("the file picker offers exactly what the drop handler accepts", () => {
+   assert.equal(composerAcceptAttr({ videoModelSelected: false }), "image/*");
+-  assert.equal(composerAcceptAttr({ videoModelSelected: "grok-imagine-video-1.5" }), "image/*,audio/*");
++  assert.equal(composerAcceptAttr({ videoModelSelected: "grok-imagine-video-1.5" }), "image/*");
+   assert.equal(composerAcceptAttr({ videoModelSelected: "grok-imagine-video" }), "image/*,video/mp4");
+ });
+
+@@ -86,8 +79,7 @@ test("every rejection reason has a message in all four locales", () => {
+   // the locale files are JSON and cannot be typed. This is that check.
+   const reasons: DropRejection[] = [
+     "not-media",
+-    "audio-needs-video-model",
+-    "audio-needs-15",
++    "audio-upload-unsupported",
+     "video-needs-base",
+     "video-single-only",
+   ];
+@@ -104,7 +96,7 @@ test("every rejection reason has a message in all four locales", () => {
+     for (const key of keys) {
+       assert.ok(bundle.prompt?.[key], locale + " is missing prompt." + key);
+     }
+-    for (const key of ["audioUsePresetVoice", "videoUseCliForEdit"]) {
++    for (const key of ["videoUseCliForEdit"]) {
+       assert.ok(bundle.prompt?.[key], locale + " is missing prompt." + key);
+     }
+   }
+diff --git a/tests/video-sound-intent-contract.test.ts b/tests/video-sound-intent-contract.test.ts
+new file mode 100644
+index 000000000..ca0cee8f5
+--- /dev/null
++++ b/tests/video-sound-intent-contract.test.ts
+@@ -0,0 +1,31 @@
++import { test } from "node:test";
++import * as assert from "node:assert/strict";
++
++import {
++  SOUND_INTENT_PROMPT_ID_PREFIX,
++  VIDEO_SOUND_INTENT_PRESETS,
++  buildVideoSoundIntentPrompt,
++  isVideoSoundIntentPrompt,
++} from "../ui/src/lib/videoSoundIntent.ts";
++
++// Sound intent presets make the existing video requirement (sound/music/no-music,
++// dialogue/no-dialogue) selectable without pretending uploaded audio files are supported.
++
++test("video sound intent presets cover silence, bgm, ambience, effects, and no-dialogue cases", () => {
++  const ids = VIDEO_SOUND_INTENT_PRESETS.map((preset) => preset.id);
++  assert.deepEqual(ids, ["no-music", "soft-bgm", "tense-music", "room-tone", "sfx", "no-dialogue"]);
++  for (const preset of VIDEO_SOUND_INTENT_PRESETS) {
++    assert.ok(preset.labelKey.startsWith("video.soundIntent."), preset.id);
++    assert.ok(preset.text.includes("music") || preset.text.includes("sound") || preset.text.includes("dialogue"), preset.id);
++  }
++});
++
++test("sound intent prompt chips are stable, after-main-prompt, and replaceable by prefix", () => {
++  const chip = buildVideoSoundIntentPrompt(VIDEO_SOUND_INTENT_PRESETS[1]);
++  assert.equal(chip.id, `${SOUND_INTENT_PROMPT_ID_PREFIX}soft-bgm`);
++  assert.equal(chip.placement, "after");
++  assert.match(chip.name, /Sound/);
++  assert.match(chip.text, /background music/);
++  assert.equal(isVideoSoundIntentPrompt(chip.id), true);
++  assert.equal(isVideoSoundIntentPrompt("video-continuity:abc"), false);
++});
+diff --git a/tests/video-sound-intent-ui-contract.test.ts b/tests/video-sound-intent-ui-contract.test.ts
+new file mode 100644
+index 000000000..32a2a4cf3
+--- /dev/null
++++ b/tests/video-sound-intent-ui-contract.test.ts
+@@ -0,0 +1,36 @@
++import { test } from "node:test";
++import * as assert from "node:assert/strict";
++import { readFileSync } from "node:fs";
++
++const read = (path: string) => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
++
++test("VideoControlsPanel exposes sound intent presets beside the voice controls", () => {
++  const panel = read("ui/src/components/VideoControlsPanel.tsx");
++  assert.match(panel, /import \{ SoundIntentPicker \} from "\.\/SoundIntentPicker"/);
++  assert.ok(panel.indexOf("<VoicePicker />") < panel.indexOf("<SoundIntentPicker />"));
++});
++
++test("SoundIntentPicker inserts one replaceable after-prompt chip and can clear it", () => {
++  const picker = read("ui/src/components/SoundIntentPicker.tsx");
++  assert.match(picker, /VIDEO_SOUND_INTENT_PRESETS/);
++  assert.match(picker, /insertPromptToComposer/);
++  assert.match(picker, /removeInsertedPromptFromComposer/);
++  assert.match(picker, /isVideoSoundIntentPrompt/);
++  assert.match(picker, /buildVideoSoundIntentPrompt/);
++  assert.match(picker, /aria-pressed=\{active\}/);
++  assert.match(picker, /video\.soundIntent\.clear/);
++  assert.match(picker, /aria-label=\{t\("video\.soundIntent\.clear"\)\}/);
++});
++
++test("all sound intent i18n keys exist in supported locales", () => {
++  const presets = read("ui/src/lib/videoSoundIntent.ts");
++  const keys = Array.from(presets.matchAll(/labelKey: "video\.soundIntent\.([^"]+)"/g)).map((m) => m[1]);
++  assert.deepEqual(keys, ["noMusic", "softBgm", "tenseMusic", "roomTone", "sfx", "noDialogue"]);
++  for (const locale of ["ko", "en", "zh-Hans", "zh-Hant"]) {
++    const bundle = JSON.parse(read(`ui/src/i18n/${locale}.json`));
++    assert.ok(bundle.video?.soundIntentTitle, locale);
++    assert.ok(bundle.video?.soundIntentHelp, locale);
++    assert.ok(bundle.video?.soundIntent?.clear, locale);
++    for (const key of keys) assert.ok(bundle.video?.soundIntent?.[key], `${locale} missing ${key}`);
++  }
++});
+diff --git a/ui/src/components/SoundIntentPicker.tsx b/ui/src/components/SoundIntentPicker.tsx
+new file mode 100644
+index 000000000..2465acb00
+--- /dev/null
++++ b/ui/src/components/SoundIntentPicker.tsx
+@@ -0,0 +1,61 @@
++import { useAppStore } from "../store/useAppStore";
++import { useI18n } from "../i18n";
++import {
++  buildVideoSoundIntentPrompt,
++  isVideoSoundIntentPrompt,
++  VIDEO_SOUND_INTENT_PRESETS,
++} from "../lib/videoSoundIntent";
++
++export function SoundIntentPicker() {
++  const { t } = useI18n();
++  const insertedPrompts = useAppStore((s) => s.insertedPrompts);
++  const insertPromptToComposer = useAppStore((s) => s.insertPromptToComposer);
++  const removeInsertedPromptFromComposer = useAppStore((s) => s.removeInsertedPromptFromComposer);
++  const activeSoundPrompt = insertedPrompts.find((prompt) => isVideoSoundIntentPrompt(prompt.id));
++
++  const clearSoundIntent = () => {
++    for (const prompt of insertedPrompts) {
++      if (isVideoSoundIntentPrompt(prompt.id)) removeInsertedPromptFromComposer(prompt.id);
++    }
++  };
++
++  const selectSoundIntent = (preset: (typeof VIDEO_SOUND_INTENT_PRESETS)[number]) => {
++    const next = buildVideoSoundIntentPrompt(preset);
++    clearSoundIntent();
++    if (activeSoundPrompt?.id !== next.id) insertPromptToComposer(next);
++  };
++
++  return (
++    <div className="option-group">
++      <div className="section-title">{t("video.soundIntentTitle")}</div>
++      <div className="composer__hint">{t("video.soundIntentHelp")}</div>
++      <div className="option-row" role="group" aria-label={t("video.soundIntentTitle")}>
++        {VIDEO_SOUND_INTENT_PRESETS.map((preset) => {
++          const prompt = buildVideoSoundIntentPrompt(preset);
++          const active = activeSoundPrompt?.id === prompt.id;
++          return (
++            <button
++              key={preset.id}
++              type="button"
++              className={`option-btn${active ? " active" : ""}`}
++              aria-pressed={active}
++              onClick={() => selectSoundIntent(preset)}
++            >
++              {t(preset.labelKey)}
++            </button>
++          );
++        })}
++        {activeSoundPrompt ? (
++          <button
++            type="button"
++            className="option-btn"
++            aria-label={t("video.soundIntent.clear")}
++            onClick={clearSoundIntent}
++          >
++            {t("video.soundIntent.clear")}
++          </button>
++        ) : null}
++      </div>
++    </div>
++  );
++}
+diff --git a/ui/src/components/VideoControlsPanel.tsx b/ui/src/components/VideoControlsPanel.tsx
+index f1b21b306..af3ecc07c 100644
+--- a/ui/src/components/VideoControlsPanel.tsx
++++ b/ui/src/components/VideoControlsPanel.tsx
+@@ -6,6 +6,7 @@ import { OptionGroup } from "./OptionGroup";
+ import { Chip, ChipRow, Select } from "./controls";
+ import { DurationSlider } from "./controls/DurationSlider";
+ import { VoicePicker } from "./VoicePicker";
++import { SoundIntentPicker } from "./SoundIntentPicker";
+ import { deriveVideoModeUI, GROK_VIDEO_MODEL_15, GROK_VIDEO_MODEL_BASE, maxVideoDurationUI, supportsVideoResolutionUI } from "../lib/imageModels";
+ import { ACTIVE_VIDEO_PROMPT_GUIDANCE, continuitySummary } from "../lib/videoContinuity";
+ import { getPresetById } from "../lib/presets";
+@@ -147,6 +148,7 @@ export function VideoControlsPanel() {
+         </div>
+       ) : null}
+       <VoicePicker />
++      <SoundIntentPicker />
+       {cameraPresets.length > 0 && (
+         <ChipRow ariaLabel={t("video.selectedCameraPresets")}>
+           {cameraPresets.map((preset) => (
+diff --git a/ui/src/components/composer/useComposerDrop.ts b/ui/src/components/composer/useComposerDrop.ts
+index 62ebeb3a9..1dfe6e170 100644
+--- a/ui/src/components/composer/useComposerDrop.ts
++++ b/ui/src/components/composer/useComposerDrop.ts
+@@ -20,8 +20,7 @@ type DropHandlers = {
+  */
+ function rejectionMessage(reason: DropRejection, t: (key: string) => string): string {
+   switch (reason) {
+-    case "audio-needs-video-model": return t("prompt.rejectAudioNeedsVideoModel");
+-    case "audio-needs-15": return t("prompt.rejectAudioNeeds15");
++    case "audio-upload-unsupported": return t("prompt.rejectAudioUploadUnsupported");
+     case "video-needs-base": return t("prompt.rejectVideoNeedsBase");
+     case "video-single-only": return t("prompt.rejectVideoSingleOnly");
+     case "not-media": return t("prompt.rejectNotMedia");
+@@ -37,11 +36,6 @@ export function useComposerDrop({ onImages }: DropHandlers) {
+     if (files.length === 0) return;
+     const sorted = sortDroppedByKind(files, { videoModelSelected });
+     if (sorted.images.length > 0) onImages(sorted.images);
+-    if (sorted.audios.length > 0) {
+-      // xAI gates uploaded clips to trusted partners, so the supported path is the preset
+-      // voice picker. Saying so now beats failing after the user waits for a generation.
+-      showToast(t("prompt.audioUsePresetVoice"), true);
+-    }
+     if (sorted.videos.length > 0) {
+       // Editing and extending exist as routes but have no composer entry point yet.
+       showToast(t("prompt.videoUseCliForEdit"), true);
+diff --git a/ui/src/i18n/en.json b/ui/src/i18n/en.json
+index 91726851c..86b8951b8 100644
+--- a/ui/src/i18n/en.json
++++ b/ui/src/i18n/en.json
+@@ -461,12 +461,10 @@
+     "afterBlocks": "After main prompt",
+     "hint": "Ctrl + Enter to generate",
+     "dropHere": "Drop to attach as reference (up to {max})",
+-    "rejectNotMedia": "Only image, audio, and mp4 files can be attached",
+-    "rejectAudioNeedsVideoModel": "Audio needs a video model selected first",
+-    "rejectAudioNeeds15": "Audio is supported only on grok-imagine-video-1.5",
++    "rejectNotMedia": "Only images and mp4 files can be attached",
++    "rejectAudioUploadUnsupported": "Audio file uploads are not available here. Use a preset voice in video settings, or describe music/sound in the prompt",
+     "rejectVideoNeedsBase": "Video input is supported only on grok-imagine-video",
+     "rejectVideoSingleOnly": "Only one source video can be used at a time",
+-    "audioUsePresetVoice": "xAI limits uploaded audio clips to partner accounts. Use a preset voice in the video settings",
+     "videoUseCliForEdit": "Video editing and extension run through ima2 video edit / ima2 video extend"
+   },
+   "canvas": {
+@@ -1270,7 +1268,18 @@
+     "voiceSection": "Voice",
+     "voiceLimit": "Up to {max}. Refer to them as <AUDIO_0> in the prompt",
+     "voiceNeeds15": "Voices are supported only on grok-imagine-video-1.5",
+-    "voiceCustomPlaceholder": "Custom voice id (/v1/custom-voices)"
++    "voiceCustomPlaceholder": "Custom voice ID (/v1/custom-voices)",
++    "soundIntentTitle": "Sound intent",
++    "soundIntentHelp": "Adds music/sound direction to the prompt without uploading audio files.",
++    "soundIntent": {
++      "noMusic": "No music",
++      "softBgm": "Soft BGM",
++      "tenseMusic": "Tense music",
++      "roomTone": "Room tone",
++      "sfx": "Sound effects",
++      "noDialogue": "No dialogue",
++      "clear": "Clear sound intent"
++    }
+   },
+   "sidebar": {
+     "appName": "Image Generator",
+diff --git a/ui/src/i18n/ko.json b/ui/src/i18n/ko.json
+index 6a8d2e949..2934bae6b 100644
+--- a/ui/src/i18n/ko.json
++++ b/ui/src/i18n/ko.json
+@@ -461,12 +461,10 @@
+     "afterBlocks": "본문 프롬프트 뒤",
+     "hint": "Ctrl + Enter로 생성",
+     "dropHere": "놓아서 참조 이미지로 추가 ({max}장까지)",
+-    "rejectNotMedia": "이미지, 오디오, mp4 파일만 첨부할 수 있습니다",
+-    "rejectAudioNeedsVideoModel": "오디오는 비디오 모델을 선택한 뒤에 쓸 수 있습니다",
+-    "rejectAudioNeeds15": "오디오는 grok-imagine-video-1.5에서만 지원합니다",
++    "rejectNotMedia": "이미지와 mp4 파일만 첨부할 수 있습니다",
++    "rejectAudioUploadUnsupported": "여기서는 오디오 파일 업로드를 사용할 수 없습니다. 비디오 설정의 프리셋 보이스를 쓰거나 프롬프트에 음악/효과음을 설명하세요",
+     "rejectVideoNeedsBase": "영상 입력은 grok-imagine-video에서만 지원합니다",
+     "rejectVideoSingleOnly": "영상은 한 번에 하나만 쓸 수 있습니다",
+-    "audioUsePresetVoice": "오디오 파일 업로드는 xAI가 파트너 계정에만 허용합니다. 비디오 설정의 프리셋 보이스를 사용하세요",
+     "videoUseCliForEdit": "영상 편집과 연장은 ima2 video edit / ima2 video extend 명령으로 실행합니다"
+   },
+   "canvas": {
+@@ -1270,7 +1268,18 @@
+     "voiceSection": "보이스",
+     "voiceLimit": "최대 {max}개. 프롬프트에서 <AUDIO_0>처럼 지칭하세요",
+     "voiceNeeds15": "보이스는 grok-imagine-video-1.5에서만 지원합니다",
+-    "voiceCustomPlaceholder": "커스텀 보이스 ID (/v1/custom-voices)"
++    "voiceCustomPlaceholder": "커스텀 보이스 ID (/v1/custom-voices)",
++    "soundIntentTitle": "사운드 의도",
++    "soundIntentHelp": "오디오 파일 업로드 없이 프롬프트에 음악/효과음 지시를 추가합니다.",
++    "soundIntent": {
++      "noMusic": "배경음악 없음",
++      "softBgm": "잔잔한 BGM",
++      "tenseMusic": "긴장감 있는 음악",
++      "roomTone": "현장음/룸톤",
++      "sfx": "효과음 강조",
++      "noDialogue": "대사 없음",
++      "clear": "사운드 지시 해제"
++    }
+   },
+   "sidebar": {
+     "appName": "이미지 생성기",
+diff --git a/ui/src/i18n/zh-Hans.json b/ui/src/i18n/zh-Hans.json
+index e2d9c2e54..98a15395f 100644
+--- a/ui/src/i18n/zh-Hans.json
++++ b/ui/src/i18n/zh-Hans.json
+@@ -461,12 +461,10 @@
+     "afterBlocks": "主提示后",
+     "hint": "Ctrl+Enter 生成",
+     "dropHere": "拖放到附件作为参考（最多 {max}）",
+-    "rejectNotMedia": "仅支持附加图片、音频和 mp4 文件",
+-    "rejectAudioNeedsVideoModel": "音频需要先选择视频模型",
+-    "rejectAudioNeeds15": "仅 grok-imagine-video-1.5 支持音频",
++    "rejectNotMedia": "仅支持附加图片和 mp4 文件",
++    "rejectAudioUploadUnsupported": "此处暂不支持上传音频文件。请在视频设置中使用预设语音，或在提示词中描述音乐/音效",
+     "rejectVideoNeedsBase": "仅 grok-imagine-video 支持视频输入",
+     "rejectVideoSingleOnly": "一次只能使用一个源视频",
+-    "audioUsePresetVoice": "xAI 仅对合作伙伴账户开放音频上传，请在视频设置中使用预设语音",
+     "videoUseCliForEdit": "视频编辑与延长请使用 ima2 video edit / ima2 video extend"
+   },
+   "canvas": {

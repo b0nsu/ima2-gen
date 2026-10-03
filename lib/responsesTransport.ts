@@ -1,3 +1,5 @@
+import { config } from "../config.js";
+import { createOAuthRequestDeadline, OAuthJobAbort, oauthAbortError, withOAuthAbort } from "./oauthJobDeadline.js";
 import { logEvent } from "./logger.js";
 import { classifyUpstreamError, classifyUpstreamErrorCode } from "./errorClassify.js";
 import { errInfo } from "./errInfo.js";
@@ -123,7 +125,7 @@ function isKnownResponsesError(value: unknown) {
   );
 }
 
-async function getEndpoint(ctx: RouteRuntimeContext, provider: string | undefined, _scope: string) {
+async function getEndpoint(ctx: RouteRuntimeContext, provider: string | undefined, signal?: AbortSignal | null) {
   if (provider === "api") {
     return {
       url: "https://api.openai.com/v1/responses",
@@ -134,7 +136,7 @@ async function getEndpoint(ctx: RouteRuntimeContext, provider: string | undefine
       },
     };
   }
-  await waitForOAuthReady(ctx);
+  await waitForOAuthReady(ctx, signal);
   // GPT OAuth: path only; oauthFetch picks the in-process Codex client or the configured proxy.
   return {
     url: null,
@@ -172,80 +174,87 @@ function combineAbortSignals(signals: AbortSignal[]): AbortSignal {
   return controller.signal;
 }
 
-export async function postResponses({
-  ctx,
-  provider,
-  scope,
-  payload,
-  requestId,
-  maxImages = 1,
-  signal = null,
-  onPartialImage = null,
-  onFinalImage = null,
-}: PostResponsesArgs): Promise<ParsedResponsesResult> {
-  const { url, headers } = await getEndpoint(ctx, provider, scope);
+type TransportWait = <T>(run: () => Promise<T>) => Promise<T>;
+
+function transportLifetime(ctx: RouteRuntimeContext, provider: string | undefined, parent?: AbortSignal | null) {
+  if (provider !== "api") {
+    const lifetime = createOAuthRequestDeadline(
+      ctx.config?.oauth?.generationTimeoutMs ?? config.oauth.generationTimeoutMs, parent,
+    );
+    return { ...lifetime, wait: <T>(run: () => Promise<T>) => withOAuthAbort(run, lifetime.signal) };
+  }
+  // Preserve API's original scheduling (including negative values) and unraced callbacks.
   const timeoutMs = ctx?.config?.oauth?.generationTimeoutMs || 400 * 1000;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
-  const fetchSignal = signal
-    ? combineAbortSignals([controller.signal, signal])
-    : controller.signal;
-  try {
-    const res = await requestResponses(ctx, url, {
-      method: "POST",
-      headers: headers as Record<string, string>,
-      signal: fetchSignal,
-      body: JSON.stringify(payload),
-    });
-    logEvent(scope, "response", { requestId, provider, status: res.status, contentType: res.headers.get("content-type") });
-    if (!res.ok) {
-      const text = await res.text();
-      const upstream = parseOpenAIErrorBody(text);
-      const rateLimit = provider === "api" ? {} : rateLimitFieldsOf(ctx, res, upstream, text);
-      if (res.status >= 400 && res.status < 500 && upstream?.message) {
-        throw makeError(safeUpstreamClientMessage(upstream, res.status), {
-          status: res.status,
-          code: normalizedCode(upstream),
-          upstreamBodyChars: text.length,
-          upstreamCode: upstream.code,
-          upstreamType: upstream.type,
-          upstreamParam: upstream.param,
-          upstreamMessageRedacted: true,
-          ...rateLimit,
-        });
-      }
-      throw makeError(`${provider === "api" ? "OpenAI API" : "OAuth proxy"} returned ${res.status}`, {
+  return {
+    signal: parent ? combineAbortSignals([controller.signal, parent]) : controller.signal,
+    wait: <T>(run: () => Promise<T>) => run(),
+    dispose: () => clearTimeout(timer),
+  };
+}
+
+function transportAbortError(error: unknown, signal: AbortSignal, provider?: string, parent?: AbortSignal | null) {
+  if (provider === "api") {
+    return parent?.aborted
+      ? makeError("Generation canceled", { status: 499, code: "GENERATION_CANCELED", cause: error })
+      : makeError("Responses image generation timed out", { status: 504, code: "RESPONSES_IMAGE_TIMEOUT", cause: error });
+  }
+  const aborted = signal.aborted ? oauthAbortError(signal) : new OAuthJobAbort("request-timeout");
+  return makeError(aborted.message, { status: aborted.status, code: aborted.code, cause: error });
+}
+
+async function readResponses(res: Response, args: PostResponsesArgs, wait: TransportWait) {
+  const { ctx, provider, scope, requestId, maxImages = 1, onPartialImage = null, onFinalImage = null } = args;
+  logEvent(scope, "response", { requestId, provider, status: res.status, contentType: res.headers.get("content-type") });
+  if (!res.ok) {
+    const text = await wait(() => res.text());
+    const upstream = parseOpenAIErrorBody(text);
+    const rateLimit = provider === "api" ? {} : rateLimitFieldsOf(ctx, res, upstream, text);
+    if (res.status >= 400 && res.status < 500 && upstream?.message) {
+      throw makeError(safeUpstreamClientMessage(upstream, res.status), {
         status: res.status,
+        code: normalizedCode(upstream),
         upstreamBodyChars: text.length,
+        upstreamCode: upstream.code,
+        upstreamType: upstream.type,
+        upstreamParam: upstream.param,
+        upstreamMessageRedacted: true,
         ...rateLimit,
       });
     }
-    if (requestId) setJobPhase(requestId, "streaming");
-    const contentType = res.headers.get("content-type") || "";
-    return contentType.includes("text/event-stream")
-      ? await parseStream(res, { requestId, scope, maxImages, onPartialImage, onFinalImage })
-      : await parseJson(res, maxImages);
+    throw makeError(`${provider === "api" ? "OpenAI API" : "OAuth proxy"} returned ${res.status}`, {
+      status: res.status,
+      upstreamBodyChars: text.length,
+      ...rateLimit,
+    });
+  }
+  if (requestId) setJobPhase(requestId, "streaming");
+  const contentType = res.headers.get("content-type") || "";
+  return contentType.includes("text/event-stream")
+    ? await wait(() => parseStream(res, { requestId, scope, maxImages, onPartialImage, onFinalImage }))
+    : await wait(() => parseJson(res, maxImages));
+}
+
+export async function postResponses(args: PostResponsesArgs): Promise<ParsedResponsesResult> {
+  const { ctx, provider, payload, signal = null } = args;
+  const { url, headers } = await getEndpoint(ctx, provider, signal);
+  const lifetime = transportLifetime(ctx, provider, signal);
+  try {
+    const res = await lifetime.wait(() => requestResponses(ctx, url, {
+      method: "POST", headers: headers as Record<string, string>,
+      signal: lifetime.signal, body: JSON.stringify(payload),
+    }));
+    return await readResponses(res, args, lifetime.wait);
   } catch (e) {
     const err = errInfo(e);
-    if (err.name === "AbortError") {
-      if (signal?.aborted) {
-        throw makeError("Generation canceled", {
-          status: 499,
-          code: "GENERATION_CANCELED",
-          cause: err.raw,
-        });
-      }
-      throw makeError("Responses image generation timed out", { status: 504, code: "RESPONSES_IMAGE_TIMEOUT", cause: err.raw });
-    }
+    if (err.name === "AbortError") throw transportAbortError(err.raw, lifetime.signal, provider, signal);
     if (isKnownResponsesError(err.raw)) throw err.raw;
     throw makeError("Responses request failed before receiving a response", {
-      status: 502,
-      code: "NETWORK_FAILED",
-      errorName: err.name,
-      upstreamMessageRedacted: true,
+      status: 502, code: "NETWORK_FAILED", errorName: err.name, upstreamMessageRedacted: true,
     });
   } finally {
-    clearTimeout(timer);
+    lifetime.dispose();
   }
 }
 
@@ -273,77 +282,64 @@ export interface OAuthImagesResult {
  * process by lib/codexBackend). Shares postResponses' endpoint readiness, timeout, cancellation and upstream
  * error classification so OAuth failures surface with the same codes as before.
  */
-export async function postOAuthImages({
-  ctx,
-  scope,
-  kind,
-  json,
-  form,
-  requestId,
-  signal = null,
-}: PostOAuthImagesArgs): Promise<OAuthImagesResult> {
-  await waitForOAuthReady(ctx);
-  const timeoutMs = ctx?.config?.oauth?.generationTimeoutMs || 400 * 1000;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  const fetchSignal = signal ? combineAbortSignals([controller.signal, signal]) : controller.signal;
+async function readOAuthImages(res: Response, args: PostOAuthImagesArgs, wait: TransportWait): Promise<OAuthImagesResult> {
+  const { ctx, scope, kind, requestId } = args;
+  logEvent(scope, "images_response", { requestId, kind, status: res.status });
+  const text = await wait(() => res.text());
+  if (!res.ok) {
+    const upstream = parseOpenAIErrorBody(text);
+    const rateLimit = rateLimitFieldsOf(ctx, res, upstream, text);
+    if (res.status >= 400 && res.status < 500 && upstream?.message) {
+      throw makeError(safeUpstreamClientMessage(upstream, res.status), {
+        status: res.status,
+        code: normalizedCode(upstream),
+        upstreamBodyChars: text.length,
+        upstreamCode: upstream.code,
+        upstreamType: upstream.type,
+        upstreamParam: upstream.param,
+        upstreamMessageRedacted: true,
+        ...rateLimit,
+      });
+    }
+    throw makeError(`GPT OAuth returned ${res.status}`, { status: res.status, upstreamBodyChars: text.length, ...rateLimit });
+  }
+  let parsed: { data?: Array<{ b64_json?: unknown }>; usage?: Record<string, number>; background?: unknown; output_format?: unknown };
   try {
-    const res = await oauthFetch(ctx, `/v1/images/${kind}`, {
+    parsed = JSON.parse(text);
+  } catch {
+    throw makeError("GPT OAuth returned a non-JSON image response", { status: 502, upstreamBodyChars: text.length });
+  }
+  const images = (Array.isArray(parsed.data) ? parsed.data : [])
+    .map((item) => (typeof item?.b64_json === "string" && item.b64_json ? { b64: item.b64_json } : null))
+    .filter((item): item is { b64: string } => item !== null);
+  logEvent(scope, "images_end", { requestId, kind, imageCount: images.length });
+  return {
+    images,
+    usage: parsed.usage && typeof parsed.usage === "object" ? parsed.usage : null,
+    background: typeof parsed.background === "string" ? parsed.background : null,
+    outputFormat: typeof parsed.output_format === "string" ? parsed.output_format : null,
+  };
+}
+
+export async function postOAuthImages(args: PostOAuthImagesArgs): Promise<OAuthImagesResult> {
+  const { ctx, kind, json, form, signal = null } = args;
+  await waitForOAuthReady(ctx, signal);
+  const lifetime = transportLifetime(ctx, "oauth", signal);
+  try {
+    const res = await lifetime.wait(() => oauthFetch(ctx, `/v1/images/${kind}`, {
       method: "POST",
       ...(json ? { headers: { "Content-Type": "application/json" }, body: JSON.stringify(json) } : { body: form ?? null }),
-      signal: fetchSignal,
-    });
-    logEvent(scope, "images_response", { requestId, kind, status: res.status });
-    const text = await res.text();
-    if (!res.ok) {
-      const upstream = parseOpenAIErrorBody(text);
-      const rateLimit = rateLimitFieldsOf(ctx, res, upstream, text);
-      if (res.status >= 400 && res.status < 500 && upstream?.message) {
-        throw makeError(safeUpstreamClientMessage(upstream, res.status), {
-          status: res.status,
-          code: normalizedCode(upstream),
-          upstreamBodyChars: text.length,
-          upstreamCode: upstream.code,
-          upstreamType: upstream.type,
-          upstreamParam: upstream.param,
-          upstreamMessageRedacted: true,
-          ...rateLimit,
-        });
-      }
-      throw makeError(`GPT OAuth returned ${res.status}`, { status: res.status, upstreamBodyChars: text.length, ...rateLimit });
-    }
-    let parsed: { data?: Array<{ b64_json?: unknown }>; usage?: Record<string, number>; background?: unknown; output_format?: unknown };
-    try {
-      parsed = JSON.parse(text);
-    } catch {
-      throw makeError("GPT OAuth returned a non-JSON image response", { status: 502, upstreamBodyChars: text.length });
-    }
-    const images = (Array.isArray(parsed.data) ? parsed.data : [])
-      .map((item) => (typeof item?.b64_json === "string" && item.b64_json ? { b64: item.b64_json } : null))
-      .filter((item): item is { b64: string } => item !== null);
-    logEvent(scope, "images_end", { requestId, kind, imageCount: images.length });
-    return {
-      images,
-      usage: parsed.usage && typeof parsed.usage === "object" ? parsed.usage : null,
-      background: typeof parsed.background === "string" ? parsed.background : null,
-      outputFormat: typeof parsed.output_format === "string" ? parsed.output_format : null,
-    };
+      signal: lifetime.signal,
+    }));
+    return await readOAuthImages(res, args, lifetime.wait);
   } catch (e) {
     const err = errInfo(e);
-    if (err.name === "AbortError") {
-      if (signal?.aborted) {
-        throw makeError("Generation canceled", { status: 499, code: "GENERATION_CANCELED", cause: err.raw });
-      }
-      throw makeError("OAuth image generation timed out", { status: 504, code: "RESPONSES_IMAGE_TIMEOUT", cause: err.raw });
-    }
+    if (err.name === "AbortError") throw transportAbortError(err.raw, lifetime.signal);
     if (isKnownResponsesError(err.raw)) throw err.raw;
     throw makeError("OAuth image request failed before receiving a response", {
-      status: 502,
-      code: "NETWORK_FAILED",
-      errorName: err.name,
-      upstreamMessageRedacted: true,
+      status: 502, code: "NETWORK_FAILED", errorName: err.name, upstreamMessageRedacted: true,
     });
   } finally {
-    clearTimeout(timer);
+    lifetime.dispose();
   }
 }
